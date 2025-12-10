@@ -112,18 +112,12 @@ col_left, col_right = st.columns([1, 1])
 # Loan question section (runs independently of evaluation)
 # -----------------------------------------------------------
 
-with col_left:
-
-    st.subheader("💬 Loan Approval Process")
-
-    customer_input = st.text_input("🔍 Enter Customer ID or Name")
-
-    if st.button("Evaluate Loan", use_container_width=True):
-        if not customer_input.strip():
-            st.warning("Please enter a valid name or ID.")
-        else:
-            evaluate_customer(customer_input)
 with col_right:
+
+    st.subheader("")
+
+   
+with col_left:
 
     st.subheader("💬 Ask a Loan Question")
 

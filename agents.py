@@ -15,16 +15,14 @@ from langchain_community.embeddings import SentenceTransformerEmbeddings
 import os
 from dotenv import load_dotenv
 
-load_dotenv()  # loads .env automatically
+# ---------------------------------------------------------
+# Environment & Logging Setup
+# ---------------------------------------------------------
+load_dotenv()
 
 if not os.getenv("OPENAI_API_KEY"):
     raise RuntimeError("Missing OPENAI_API_KEY in environment or .env file.")
 
-
-
-# ---------------------------------------------------------
-# Logging
-# ---------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -70,27 +68,17 @@ def record_decision(customer, decision, risk, rate, pr_status):
     except Exception as e:
         logger.error(f"Decision save error: {e}")
 
-# ---------------------------------------------------------
-# Utility: Clean string values
-# ---------------------------------------------------------
+
 def clean_str(value, default="Unknown"):
-    """Return safe, trimmed string without NaN/None."""
-    if value is None:
+    """Utility: safe string cleaning."""
+    if pd.isna(value):
         return default
-    try:
-        if pd.isna(value):
-            return default
-    except:
-        pass
-
-    value = str(value).strip()
-    if value.lower() in ("nan", "none", ""):
-        return default
-    return value
+    s = str(value).strip()
+    return s if s else default
 
 
 # ---------------------------------------------------------
-# Load Customer Data (FINAL FIXED VERSION)
+# Customer Data Loading
 # ---------------------------------------------------------
 def load_customer_data(customer_input: str):
     """
@@ -108,15 +96,22 @@ def load_customer_data(customer_input: str):
         pr_df = pd.read_csv("data/pr_status.csv")
 
         # Ensure ID is string
-        for df in (credit_df, account_df, pr_df):
-            df["ID"] = df["ID"].astype(str)
+        credit_df["ID"] = credit_df["ID"].astype(str)
+        account_df["ID"] = account_df["ID"].astype(str)
+        pr_df["ID"] = pr_df["ID"].astype(str)
+
+        # Normalize input
+        customer_input = str(customer_input).strip()
 
         # -----------------------
-        # Search: ID OR Name
+        # First: try ID match
         # -----------------------
-        if customer_input.isdigit():
+        is_id = customer_input.isdigit()
+        if is_id:
+            # Use ID for credit lookup
             row_credit = credit_df[credit_df["ID"] == customer_input]
         else:
+            # Search by exact name for credit
             name_lower = customer_input.lower()
             matches = credit_df[credit_df["Name"].str.lower() == name_lower]
 
@@ -133,7 +128,10 @@ def load_customer_data(customer_input: str):
             return None
 
         row_credit = row_credit.iloc[0]
-        customer_id = clean_str(row_credit["ID"])
+        customer_id = clean_str(row_credit.get("ID"))
+        name = clean_str(row_credit.get("Name"))
+        email = clean_str(row_credit.get("Email"))
+        credit_score = row_credit.get("CreditScore")
 
         # -----------------------
         # Account Status Lookup
@@ -169,10 +167,10 @@ def load_customer_data(customer_input: str):
         # -----------------------
         customer = {
             "ID": customer_id,
-            "Name": clean_str(row_credit.get("Name")),
-            "Email": clean_str(row_credit.get("Email")),
+            "Name": name,
+            "Email": email,
+            "CreditScore": credit_score,
             "Nationality": nationality_value,
-            "CreditScore": row_credit.get("CreditScore"),
             "AccountStatus": clean_str(row_account.get("AccountStatus")),
             "PRStatus": pr_status,
         }
@@ -182,7 +180,6 @@ def load_customer_data(customer_input: str):
     except Exception as e:
         logger.error(f"Customer load error: {e}")
         return None
-
 
 
 # ---------------------------------------------------------
@@ -207,18 +204,36 @@ def setup_rag():
 
     except Exception as e:
         logger.error(f"RAG setup failed: {e}")
-        raise
+        return None
 
 
 # ---------------------------------------------------------
 # Policy Tool
 # ---------------------------------------------------------
 def build_policy_tool(policy_db):
+    """Build a robust PolicyRetriever tool around the FAISS policy DB."""
+
+    if policy_db is None:
+        # Explicitly signal that the tool cannot be built
+        logging.error("Policy DB is None. PolicyRetriever tool will not be available.")
+        return None
 
     @tool("PolicyRetriever")
-    def search_policies(query: str) -> str:
-        """Retrieve relevant loan policy sections from the internal PDF library."""
+    def search_policies(query : str) -> str:
+        """Retrieve relevant loan policy sections from the internal PDF library.
+
+        The input query may come in any format from the LLM (string, dict, list, etc.).
+        This wrapper makes sure it is converted to a string before searching.
+        """
         try:
+            # Make the tool robust to non-string inputs
+            if not isinstance(query, str):
+                query = str(query)
+
+            query = query.strip()
+            if not query:
+                return "Empty policy query. Please provide a valid question."
+
             matches = policy_db.similarity_search(query, k=5)
             if not matches:
                 return "No relevant policy sections found."
@@ -228,8 +243,9 @@ def build_policy_tool(policy_db):
                 for i, doc in enumerate(matches)
             )
 
-        except Exception:
-            return "Policy search failed."
+        except Exception as e:
+            logging.exception("PolicyRetriever tool failed")
+            return f"Policy search failed: {e}"
 
     return search_policies
 
@@ -271,15 +287,23 @@ def process_customer(customer_input: str):
         policy_agent = Agent(
             role="Policy Analyst",
             goal="Interpret and summarize relevant loan policies.",
-            backstory="You are an expert in financial regulatory policy and internal lending guidelines.REMINDER: If a Non Singaporean with NO PR Status, High risk",
-            tools=[policy_tool],
+            backstory=(
+                "You are an expert in financial regulations and this bank's "
+                "internal credit & loan policies. You always base your analysis "
+                "on the provided policy documents and never guess."
+            ),
+            tools=[t for t in [policy_tool] if t is not None],
             allow_delegation=False,
         )
 
         decision_agent = Agent(
             role="Loan Decision Agent",
             goal="Make a final loan decision and draft a formal letter.",
-            backstory="You are a senior loan officer who balances risk, policy, and responsible lending. REMINDER: If a Non Singaporean with NO PR Status, High risk",
+            backstory=(
+                "You are a senior loan officer who balances risk and opportunity "
+                "while strictly following the bank's credit rules. "
+                "REMINDER: If a Non Singaporean with NO PR Status, High risk."
+            ),
             allow_delegation=False,
         )
 
@@ -292,47 +316,41 @@ def process_customer(customer_input: str):
         )
 
         policy_task = Task(
-            name="extract_policies",
-            description="Use PolicyRetriever to summarize relevant loan policies.",
+            name="extract_policy",
+            description=(
+                "Using the policy tool, extract the sections relevant to this customer's "
+                "credit score, nationality, PR status and high risk."
+            ),
             agent=policy_agent,
-            expected_output="Bullet list or JSON summary of policy rules.",
+            expected_output="Summary of key policy rules that apply.",
         )
 
         decision_task = Task(
             name="make_decision",
             description=(
-                "Using the customer data and policy rules, determine:\n"
-                "- Risk Rating\n"
-                "- Recommended Interest Rate\n"
-                "- Final Decision (Approved/Rejected)\n"
-                "- A Formal Letter\n\n"
-                "MANDATORY HARD RULE:\n"
-                "If nationality is NOT Singaporean AND PR_Status is false/no/0,\n"
-                "→ Risk MUST be 'High Risk' AND Decision MUST be 'Rejected'.\n\n"
-                f"Customer Name: {name}\n"
-                f"Nationality: {nationality}\n"
-                f"PR Status: {raw_pr}\n"
-                f"High Risk Override Applied: {high_risk_override}\n\n"
-                "Return ONLY valid JSON:\n"
+                "Given the customer data and policy summary, decide:\n"
+                "- risk level\n"
+                "- whether to approve or reject the loan\n"
+                "- applicable interest rate (if any)\n"
+                "Return a JSON object with structure:\n"
                 "{\n"
-                " 'decision': 'approved'/'rejected',\n"
-                " 'customer_name': '<name>',\n"
-                " 'nationality': '<nationality>',\n"
-                " 'pr_status': '<pr>',\n"
-                " 'risk': '<risk>',\n"
+                " 'risk': '<Low/Medium/High>',\n"
+                " 'decision': '<approved/rejected>',\n"
                 " 'interest_rate': '<rate or null>',\n"
-                " 'formal_letter': '<letter>'\n"
-                "}"
+                " 'formal_letter': '<letter to customer>',\n"
+                " 'pr_status': '<PR status used>'\n"
+                "}\n"
+                "REMINDER: If a Non Singaporean with NO PR Status, High risk."
             ),
             agent=decision_agent,
-            expected_output="A JSON dict with the decision fields."
+            expected_output="A JSON dict with the decision fields.",
         )
 
         # Run crew
         crew = Crew(
             agents=[data_agent, policy_agent, decision_agent],
             tasks=[data_task, policy_task, decision_task],
-            verbose=True
+            verbose=True,
         )
 
         results = crew.kickoff()
@@ -340,11 +358,15 @@ def process_customer(customer_input: str):
 
         # Parse JSON from decision task
         raw_json = outputs.get("make_decision", "").replace("'", '"')
-        decision_data = json.loads(raw_json)
+        try:
+            decision_data = json.loads(raw_json)
+        except Exception:
+            # If parsing fails, fallback to a minimal structure
+            decision_data = {}
 
-        # Extract fields
-        decision = decision_data.get("decision", "undetermined")
+        # Extract fields with defaults
         risk = decision_data.get("risk", "Unknown")
+        decision = decision_data.get("decision", "pending").capitalize()
         rate = decision_data.get("interest_rate", "Unknown")
         letter = decision_data.get("formal_letter", "")
         out_pr = decision_data.get("pr_status", raw_pr)
@@ -352,7 +374,7 @@ def process_customer(customer_input: str):
         # ENFORCE HIGH RISK AUTO REJECTION
         if high_risk_override:
             risk = "High Risk"
-            decision = "rejected"
+            decision = "Rejected"
 
         # Save permanent record
         record_decision(customer, decision, risk, rate, out_pr)
@@ -369,10 +391,11 @@ def process_customer(customer_input: str):
 
     except Exception as e:
         return {"output": f"Error: {e}"}
-        
+
+
 # ---------------------------------------------------------
-# Answering other loan related questions 
-# ---------------------------------------------------------       
+# Generic Loan Q&A
+# ---------------------------------------------------------
 def answer_loan_question(question: str) -> dict:
     """
     Generic loan Q&A entry point.
@@ -405,14 +428,13 @@ def answer_loan_question(question: str) -> dict:
         # -------------------------------------------------
         # Build tools: Policy RAG + CSV / evaluation access
         # -------------------------------------------------
-        policy_tool = None
         try:
             policy_db = setup_rag()
-            if policy_db is not None:
-                policy_tool = build_policy_tool(policy_db)
-        except Exception:
+        except Exception as e:
             logging.exception("Failed to set up policy RAG index.")
-            policy_tool = None
+            policy_db = None
+
+        policy_tool = build_policy_tool(policy_db) if policy_db is not None else None
 
         @tool("CustomerDataLookup")
         def customer_data_lookup(query: str) -> str:
@@ -451,8 +473,13 @@ def answer_loan_question(question: str) -> dict:
                 return f"Customer evaluation failed: {e}"
 
         tools = [customer_data_lookup, customer_evaluation]
+        # Only append policy tool if it was successfully built
         if policy_tool is not None:
-            tools.append(policy_tool)
+            try:
+                _ = policy_tool.name  # minimal sanity check
+                tools.append(policy_tool)
+            except Exception:
+                logging.error("Invalid policy tool detected; skipping it.")
 
         # --------------------------------
         # Guardrail: loan-domain questions
@@ -529,7 +556,7 @@ def answer_loan_question(question: str) -> dict:
             answer_text = FALLBACK_MSG
 
         # Option B: natural language + metadata (when applicable).
-        # We don't track per-tool usage here, so context is left empty for now,
+        # We don't track per-tool usage here yet, so context is left minimal,
         # but this can be extended later if needed.
         return {
             "answer": answer_text,
