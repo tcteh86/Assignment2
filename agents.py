@@ -369,3 +369,208 @@ def process_customer(customer_input: str):
 
     except Exception as e:
         return {"output": f"Error: {e}"}
+        
+# ---------------------------------------------------------
+# Answering other loan related questions 
+# ---------------------------------------------------------       
+def answer_loan_question(question: str) -> dict:
+    """
+    Interpret a loan-related natural language question about a single customer
+    and answer it using the existing loan evaluation pipeline.
+
+    Returns a dict with:
+    - "answer": natural language response for the UI
+    - "context": structured JSON with key loan details (when available)
+    - "error": optional error message
+    """
+    try:
+        if not isinstance(question, str) or not question.strip():
+            return {
+                "error": "empty_question",
+                "answer": (
+                    "Please ask a loan-related question, for example: "
+                    "'What is the risk for Andy?'"
+                ),
+                "context": {},
+            }
+
+        # Load the same CSVs used by load_customer_data so that we can
+        # map names / IDs mentioned in the question to a single customer.
+        credit_df = pd.read_csv("data/credit_scores.csv")
+        account_df = pd.read_csv("data/account_status.csv")
+
+        question_raw = question
+        question_lower = question_raw.lower()
+
+        # -------------------------------
+        # 1) Try to match by ID
+        # -------------------------------
+        matched_id = None
+        candidate_ids = credit_df["ID"].astype(str).unique()
+        for cid in candidate_ids:
+            if cid and cid in question_raw:
+                matched_id = cid
+                break
+
+        # -------------------------------
+        # 2) If no ID, try to match by Name
+        #    (exact, case-insensitive substring match)
+        #    Single-customer questions only (your requirement 7B)
+        # -------------------------------
+        matched_name = None
+        if matched_id is None:
+            candidate_names = (
+                account_df["Name"].dropna().astype(str).unique()
+            )
+            for name in candidate_names:
+                name_clean = name.strip()
+                if not name_clean:
+                    continue
+                if name_clean.lower() in question_lower:
+                    if matched_name is None:
+                        matched_name = name_clean
+                    else:
+                        # More than one match → ambiguous, don't try to be clever
+                        return {
+                            "error": "ambiguous_customer",
+                            "answer": (
+                                "I found multiple customers that might match your question. "
+                                "Please ask about one person at a time or use their unique ID."
+                            ),
+                            "context": {},
+                        }
+
+        # Decide which key to use for process_customer
+        if matched_id:
+            customer_key = matched_id
+        elif matched_name:
+            customer_key = matched_name
+        else:
+            # Requirement (3): reply with "no user information found"
+            return {
+                "error": "no user information found",
+                "answer": (
+                    "I couldn't find any user information for that question. "
+                    "Please mention the customer's exact ID or full name."
+                ),
+                "context": {},
+            }
+
+        # -------------------------------
+        # 3) Run the existing evaluation pipeline
+        # -------------------------------
+        eval_result = process_customer(customer_key)
+
+        if not isinstance(eval_result, dict):
+            return {
+                "error": "unexpected_result",
+                "answer": (
+                    "Something went wrong while evaluating that customer. "
+                    "Please try again or use a different name/ID."
+                ),
+                "context": {},
+            }
+
+        # Handle explicit 'Customer not found' or error cases
+        if eval_result.get("output") == "Customer not found.":
+            return {
+                "error": "no user information found",
+                "answer": (
+                    "I couldn't find any user information for that question. "
+                    "Please check the customer ID or name."
+                ),
+                "context": {},
+            }
+
+        if "error" in eval_result:
+            return {
+                "error": eval_result["error"],
+                "answer": (
+                    "I ran into a problem while checking that customer: "
+                    f"{eval_result['error']}"
+                ),
+                "context": {},
+            }
+
+        # Build structured context from evaluation
+        context = {
+            "customer_input": customer_key,
+            "customer_name": eval_result.get("customer_name"),
+            "nationality": eval_result.get("nationality"),
+            "pr_status": eval_result.get("pr_status"),
+            "risk": eval_result.get("risk"),
+            "decision": eval_result.get("decision"),
+            "interest_rate": eval_result.get("rate"),
+        }
+
+        # -------------------------------
+        # 4) Use a lightweight QA agent to phrase the answer
+        #    (still using CrewAI + your default LLM → cheap & fast)
+        # -------------------------------
+        qa_agent = Agent(
+            role="Loan Q&A Agent",
+            goal=(
+                "Answer loan-related questions about a single customer using the "
+                "provided structured loan evaluation context."
+            ),
+            backstory=(
+                "You are an experienced loan officer. You explain risk, decisions "
+                "and interest rates clearly, using only the facts given to you."
+            ),
+            allow_delegation=False,
+        )
+
+        qa_task = Task(
+            name="answer_question",
+            description=(
+                "User question: "
+                + repr(question_raw)
+                + "\n\n"
+                "You are given the evaluated loan details for one customer as JSON:\n"
+                + json.dumps(context)
+                + "\n\n"
+                "Answer the user's question strictly using this JSON. "
+                "Do not invent any new numbers, customers or rules. "
+                "If the question asks about something you cannot infer from the JSON, "
+                "say so and focus on what you do know."
+            ),
+            agent=qa_agent,
+            expected_output=(
+                "A short, friendly natural language answer (2–5 sentences) "
+                "that directly addresses the user's question."
+            ),
+        )
+
+        crew = Crew(
+            agents=[qa_agent],
+            tasks=[qa_task],
+            verbose=False,
+        )
+        results = crew.kickoff()
+        try:
+            answer_text = results.tasks_output[0].raw
+        except Exception:
+            answer_text = (
+                "I evaluated the customer, but I couldn't generate a detailed answer. "
+                "Here is what I know: "
+                f"decision={context.get('decision')}, "
+                f"risk={context.get('risk')}, "
+                f"interest rate={context.get('interest_rate')}."
+            )
+
+        # Return BOTH: structured JSON + natural language (your Option C)
+        return {
+            "answer": answer_text,
+            "context": context,
+        }
+
+    except Exception as e:
+        logging.exception("Error in answer_loan_question")
+        return {
+            "error": str(e),
+            "answer": (
+                "Something went wrong while answering your question. "
+                "Please try again or refine your question."
+            ),
+            "context": {},
+        }

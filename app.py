@@ -1,5 +1,6 @@
 import streamlit as st
-from agents import process_customer
+from agents import process_customer, answer_loan_question
+
 
 # -----------------------------------------------------------
 # Initialize session state
@@ -9,6 +10,9 @@ if "applications" not in st.session_state:
 
 if "current_application" not in st.session_state:
     st.session_state.current_application = None
+
+if "loan_qa" not in st.session_state:
+    st.session_state.loan_qa = None
 
 # -----------------------------------------------------------
 # Helper functions
@@ -67,6 +71,12 @@ def evaluate_customer(customer_input):
         "memo": result.get("output"),
     }
 
+def ask_loan_question(question: str):
+    """Call the backend QA pipeline and store the result in session state."""
+    with st.spinner("🤖 Answering your question…"):
+        result = answer_loan_question(question)
+
+    st.session_state.loan_qa = result
 
 # -----------------------------------------------------------
 # Save officer decision to history
@@ -93,6 +103,7 @@ st.title("🏦 Loan Evaluation Dashboard")
 st.write("Evaluate a customer's loan eligibility using AI + officer review.")
 
 st.divider()
+st.subheader("💬 Loan Approval Process")
 
 customer_input = st.text_input("🔍 Enter Customer ID or Name")
 
@@ -103,6 +114,46 @@ with colA:
             st.warning("Please enter a valid name or ID.")
         else:
             evaluate_customer(customer_input)
+
+# -----------------------------------------------------------
+# Loan question section (runs independently of evaluation)
+# -----------------------------------------------------------
+st.divider()
+st.subheader("💬 Ask a Loan Question")
+
+question_text = st.text_input(
+    "Ask a loan-related question about a single customer (use their exact name or ID):",
+    key="loan_question_input",
+)
+
+col_q1, col_q2 = st.columns([1, 0.4])
+with col_q1:
+    if st.button("Ask Question", use_container_width=True):
+        if not question_text.strip():
+            st.warning("Please enter a question first.")
+        else:
+            ask_loan_question(question_text)
+
+# Show the latest QA result, if any
+qa_result = st.session_state.get("loan_qa")
+
+if qa_result:
+    st.markdown("### 🤖 AI Answer")
+    if qa_result.get("answer"):
+        st.write(qa_result["answer"])
+
+    # Friendly handling when there is an error
+    if qa_result.get("error") and not qa_result.get("answer"):
+        st.info(
+            "I couldn't fully answer that question. "
+            f"Details: {qa_result.get('error')}"
+        )
+
+    # Structured JSON context (if available) — your Option C
+    if qa_result.get("context"):
+        with st.expander("📦 See evaluated loan details (JSON)", expanded=False):
+            st.json(qa_result["context"])
+
 
 # -----------------------------------------------------------
 # Show AI evaluation block
@@ -164,16 +215,19 @@ if app:
     st.divider()
 
 
-# -----------------------------------------------------------
-# SIDEBAR DASHBOARD
-# -----------------------------------------------------------
+# ======================================================
+# 📊 Sidebar — Loan Dashboard (Improved Rendering)
+# ======================================================
+
 st.sidebar.title("📊 Loan Dashboard")
 
 apps = st.session_state.applications
 
-# Stats
-approved = sum(1 for a in apps if a["decision"] == "Approved")
-rejected = sum(1 for a in apps if a["decision"] == "Rejected")
+# -----------------------------
+# 📈 Metrics
+# -----------------------------
+approved = sum(1 for a in apps if a.get("decision") == "Approved")
+rejected = sum(1 for a in apps if a.get("decision") == "Rejected")
 total = len(apps)
 
 st.sidebar.metric("Total Evaluations", total)
@@ -183,17 +237,42 @@ st.sidebar.metric("Rejected", rejected)
 st.sidebar.write("---")
 st.sidebar.subheader("📁 Recent Applications")
 
-for app in reversed(apps[-10:]):
-    st.sidebar.markdown(
-        card(
-            f"{app['customer_name']} ({app['customer']})",
-            f"""
-            {status_badge(app['decision'])}<br><br>
-            <b>Nationality:</b> {app['nationality']}<br>
-            <b>PR Status:</b> {app['pr_status']}<br>
-            <b>Risk:</b> {app['risk']}<br>
-            <b>Rate:</b> {app['rate']}<br>
-            """
-        ),
-        unsafe_allow_html=True,
-    )
+# -----------------------------
+# 📦 Recent Application Cards
+# -----------------------------
+recent = list(reversed(apps[-10:]))
+
+if not recent:
+    st.sidebar.write("No evaluations yet.")
+else:
+    for app in recent:
+
+        # --- Safety: ensure missing fields don't break the UI ---
+        customer_name = app.get("customer_name", "Unknown")
+        customer_id   = app.get("customer", "N/A")
+        nationality   = app.get("nationality", "N/A")
+        pr_status     = app.get("pr_status", "N/A")
+        risk          = app.get("risk", "N/A")
+        rate          = app.get("rate", "N/A")
+        decision      = app.get("decision", "Unknown")
+
+        # --- Badge HTML (safe-rendered) ---
+        badge_html = status_badge(decision)
+
+        # --- Card body ---
+        body_html = f"""
+            {badge_html}<br><br>
+            <b>Nationality:</b> {nationality}<br>
+            <b>PR Status:</b> {pr_status}<br>
+            <b>Risk:</b> {risk}<br>
+            <b>Rate:</b> {rate}<br>
+        """
+
+        # --- Render card (your existing card helper) ---
+        st.sidebar.markdown(
+            card(
+                f"{customer_name} ({customer_id})",
+                body_html
+            ),
+            unsafe_allow_html=True,
+        )
