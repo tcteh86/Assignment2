@@ -375,169 +375,143 @@ def process_customer(customer_input: str):
 # ---------------------------------------------------------       
 def answer_loan_question(question: str) -> dict:
     """
-    Interpret a loan-related natural language question about a single customer
-    and answer it using the existing loan evaluation pipeline.
+    Generic loan Q&A entry point.
 
-    Returns a dict with:
-    - "answer": natural language response for the UI
-    - "context": structured JSON with key loan details (when available)
-    - "error": optional error message
+    The question can be:
+    - About general loan policies (interest rates by risk, eligibility rules, etc.)
+    - About a specific customer (their risk, decision, credit score, etc.)
+
+    This function:
+    - Uses PDF-based RAG over loan policies (if available)
+    - Uses CSV-based customer data and/or the existing process_customer pipeline
+    - Delegates reasoning to a dedicated QA Agent
+    - Returns a friendly natural-language answer and optional metadata context.
     """
+    FALLBACK_MSG = "I don't have the necessary information to answer that."
+
     try:
         if not isinstance(question, str) or not question.strip():
             return {
-                "error": "empty_question",
                 "answer": (
                     "Please ask a loan-related question, for example: "
-                    "'What is the risk for Andy?'"
+                    "'What is the latest interest rate for high-risk customers?' "
+                    "or 'What is the risk level for customer 1111?'."
                 ),
                 "context": {},
             }
 
-        # Load the same CSVs used by load_customer_data so that we can
-        # map names / IDs mentioned in the question to a single customer.
-        credit_df = pd.read_csv("data/credit_scores.csv")
-        account_df = pd.read_csv("data/account_status.csv")
+        user_question = question.strip()
 
-        question_raw = question
-        question_lower = question_raw.lower()
+        # -------------------------------------------------
+        # Build tools: Policy RAG + CSV / evaluation access
+        # -------------------------------------------------
+        policy_tool = None
+        try:
+            policy_db = setup_rag()
+            if policy_db is not None:
+                policy_tool = build_policy_tool(policy_db)
+        except Exception:
+            logging.exception("Failed to set up policy RAG index.")
+            policy_tool = None
 
-        # -------------------------------
-        # 1) Try to match by ID
-        # -------------------------------
-        matched_id = None
-        candidate_ids = credit_df["ID"].astype(str).unique()
-        for cid in candidate_ids:
-            if cid and cid in question_raw:
-                matched_id = cid
-                break
+        @tool("CustomerDataLookup")
+        def customer_data_lookup(query: str) -> str:
+            """Look up raw customer information from CSVs by ID or exact name.
 
-        # -------------------------------
-        # 2) If no ID, try to match by Name
-        #    (exact, case-insensitive substring match)
-        #    Single-customer questions only (your requirement 7B)
-        # -------------------------------
-        matched_name = None
-        if matched_id is None:
-            candidate_names = (
-                account_df["Name"].dropna().astype(str).unique()
-            )
-            for name in candidate_names:
-                name_clean = name.strip()
-                if not name_clean:
-                    continue
-                if name_clean.lower() in question_lower:
-                    if matched_name is None:
-                        matched_name = name_clean
-                    else:
-                        # More than one match → ambiguous, don't try to be clever
-                        return {
-                            "error": "ambiguous_customer",
-                            "answer": (
-                                "I found multiple customers that might match your question. "
-                                "Please ask about one person at a time or use their unique ID."
-                            ),
-                            "context": {},
-                        }
+            Use this when the user asks about a specific customer's credit score,
+            nationality, PR status, or account status.
+            """
+            try:
+                data = load_customer_data(query)
+                if data is None:
+                    return "Customer not found."
+                if isinstance(data, dict):
+                    return json.dumps(data)
+                return str(data)
+            except Exception as e:
+                logging.exception("CustomerDataLookup failed")
+                return f"Customer lookup failed: {e}"
 
-        # Decide which key to use for process_customer
-        if matched_id:
-            customer_key = matched_id
-        elif matched_name:
-            customer_key = matched_name
-        else:
-            # Requirement (3): reply with "no user information found"
+        @tool("CustomerEvaluation")
+        def customer_evaluation(query: str) -> str:
+            """Run the full loan evaluation pipeline for a customer.
+
+            Use this when the user asks about a specific customer's risk level,
+            loan decision or applicable interest rate.
+            """
+            try:
+                result = process_customer(query)
+                if result is None:
+                    return "Customer not found."
+                if isinstance(result, dict):
+                    return json.dumps(result)
+                return str(result)
+            except Exception as e:
+                logging.exception("CustomerEvaluation failed")
+                return f"Customer evaluation failed: {e}"
+
+        tools = [customer_data_lookup, customer_evaluation]
+        if policy_tool is not None:
+            tools.append(policy_tool)
+
+        # --------------------------------
+        # Guardrail: loan-domain questions
+        # --------------------------------
+        loan_keywords = [
+            "loan", "credit", "interest", "rate", "risk",
+            "mortgage", "installment", "emi", "overdraft",
+            "principal", "repayment", "customer", "borrower",
+            "lending", "collateral", "credit score",
+        ]
+        lowered = user_question.lower()
+        if not any(k in lowered for k in loan_keywords):
+            # Clearly out-of-domain → friendly fallback
             return {
-                "error": "no user information found",
-                "answer": (
-                    "I couldn't find any user information for that question. "
-                    "Please mention the customer's exact ID or full name."
-                ),
+                "answer": FALLBACK_MSG,
                 "context": {},
             }
 
         # -------------------------------
-        # 3) Run the existing evaluation pipeline
-        # -------------------------------
-        eval_result = process_customer(customer_key)
-
-        if not isinstance(eval_result, dict):
-            return {
-                "error": "unexpected_result",
-                "answer": (
-                    "Something went wrong while evaluating that customer. "
-                    "Please try again or use a different name/ID."
-                ),
-                "context": {},
-            }
-
-        # Handle explicit 'Customer not found' or error cases
-        if eval_result.get("output") == "Customer not found.":
-            return {
-                "error": "no user information found",
-                "answer": (
-                    "I couldn't find any user information for that question. "
-                    "Please check the customer ID or name."
-                ),
-                "context": {},
-            }
-
-        if "error" in eval_result:
-            return {
-                "error": eval_result["error"],
-                "answer": (
-                    "I ran into a problem while checking that customer: "
-                    f"{eval_result['error']}"
-                ),
-                "context": {},
-            }
-
-        # Build structured context from evaluation
-        context = {
-            "customer_input": customer_key,
-            "customer_name": eval_result.get("customer_name"),
-            "nationality": eval_result.get("nationality"),
-            "pr_status": eval_result.get("pr_status"),
-            "risk": eval_result.get("risk"),
-            "decision": eval_result.get("decision"),
-            "interest_rate": eval_result.get("rate"),
-        }
-
-        # -------------------------------
-        # 4) Use a lightweight QA agent to phrase the answer
-        #    (still using CrewAI + your default LLM → cheap & fast)
+        # QA Agent that uses the tools
         # -------------------------------
         qa_agent = Agent(
-            role="Loan Q&A Agent",
+            role="Loan Knowledge Q&A Agent",
             goal=(
-                "Answer loan-related questions about a single customer using the "
-                "provided structured loan evaluation context."
+                "Answer questions about loan policies, interest rates, credit risk "
+                "and this bank's customers using ONLY the provided tools and data."
             ),
             backstory=(
-                "You are an experienced loan officer. You explain risk, decisions "
-                "and interest rates clearly, using only the facts given to you."
+                "You are a senior loan officer. You have access to:\n"
+                "- A tool that searches internal loan policies from PDF files.\n"
+                "- Tools that look up and evaluate specific customers from CSV data.\n"
+                "You are careful, conservative, and never guess."
             ),
+            tools=tools,
             allow_delegation=False,
         )
 
         qa_task = Task(
-            name="answer_question",
+            name="loan_qa",
             description=(
-                "User question: "
-                + repr(question_raw)
-                + "\n\n"
-                "You are given the evaluated loan details for one customer as JSON:\n"
-                + json.dumps(context)
-                + "\n\n"
-                "Answer the user's question strictly using this JSON. "
-                "Do not invent any new numbers, customers or rules. "
-                "If the question asks about something you cannot infer from the JSON, "
-                "say so and focus on what you do know."
+                "User question:\n"
+                f"{user_question}\n\n"
+                "Important instructions:\n"
+                "- You may call the available tools to search policies or "
+                "look up/evaluate customers.\n"
+                "- ONLY use information returned by these tools. Do NOT use any "
+                "outside or general world knowledge.\n"
+                "- If the question cannot be answered from the tools and data "
+                "you have, you MUST respond exactly with this sentence:\n"
+                f'"{FALLBACK_MSG}"\n'
+                "- If the question is not related to loans, credit, interest "
+                "rates, loan risk, or bank customers, you MUST also respond with "
+                f'"{FALLBACK_MSG}"\n'
+                "- When you can answer, be concise and clear (2–5 sentences)."
             ),
             agent=qa_agent,
             expected_output=(
-                "A short, friendly natural language answer (2–5 sentences) "
-                "that directly addresses the user's question."
+                "A concise natural-language answer to the user's question. "
+                f"If you lack information, return exactly: '{FALLBACK_MSG}'"
             ),
         )
 
@@ -546,31 +520,25 @@ def answer_loan_question(question: str) -> dict:
             tasks=[qa_task],
             verbose=False,
         )
+
         results = crew.kickoff()
         try:
             answer_text = results.tasks_output[0].raw
         except Exception:
-            answer_text = (
-                "I evaluated the customer, but I couldn't generate a detailed answer. "
-                "Here is what I know: "
-                f"decision={context.get('decision')}, "
-                f"risk={context.get('risk')}, "
-                f"interest rate={context.get('interest_rate')}."
-            )
+            logging.exception("Failed to read QA task output")
+            answer_text = FALLBACK_MSG
 
-        # Return BOTH: structured JSON + natural language (your Option C)
+        # Option B: natural language + metadata (when applicable).
+        # We don't track per-tool usage here, so context is left empty for now,
+        # but this can be extended later if needed.
         return {
             "answer": answer_text,
-            "context": context,
+            "context": {},
         }
 
     except Exception as e:
         logging.exception("Error in answer_loan_question")
         return {
-            "error": str(e),
-            "answer": (
-                "Something went wrong while answering your question. "
-                "Please try again or refine your question."
-            ),
-            "context": {},
+            "answer": FALLBACK_MSG,
+            "context": {"error": str(e)},
         }
