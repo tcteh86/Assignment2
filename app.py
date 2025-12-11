@@ -1,4 +1,9 @@
+"""Streamlit UI for the loan assistant with modern cards and officer workflow."""
+
+import html
+
 import streamlit as st
+
 from agents import handle_user_input
 
 # ===========================================================
@@ -6,6 +11,99 @@ from agents import handle_user_input
 # ===========================================================
 
 st.set_page_config(page_title="Loan Assistant", layout="wide")
+
+# Inject a lightweight design system to modernize Streamlit's default look.
+# Helper renderers and layout utilities
+
+st.markdown(
+    """
+    <style>
+    :root {
+        --card-bg: rgba(255, 255, 255, 0.85);
+        --card-border: rgba(15, 23, 42, 0.1);
+        --card-shadow: 0 15px 30px rgba(15, 23, 42, 0.08);
+        --accent-bg: linear-gradient(135deg, #2563eb, #7c3aed);
+    }
+    .card {
+        padding: 1.2rem 1.5rem;
+        margin-bottom: 1rem;
+        border-radius: 18px;
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        box-shadow: var(--card-shadow);
+    }
+    .card.accent {
+        background: var(--accent-bg);
+        color: #fff;
+    }
+    .card-title {
+        font-weight: 600;
+        font-size: 1rem;
+        margin-bottom: 0.6rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .card ul {
+        list-style: none;
+        padding-left: 0;
+        margin: 0;
+    }
+    .card ul li {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.35rem 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    .card ul li:last-child {
+        border-bottom: none;
+    }
+    .card ul li span {
+        font-weight: 600;
+        opacity: 0.85;
+    }
+    .memo-box {
+        border-radius: 16px;
+        padding: 1.5rem;
+        background: rgba(15, 23, 42, 0.04);
+        border: 1px dashed rgba(15, 23, 42, 0.2);
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def render_info_card(title: str, info_pairs, accent: bool = False) -> None:
+    """Render a stylized card with label/value rows."""
+    if not info_pairs:
+        return
+    items = "".join(
+        f"<li><span>{html.escape(str(label))}</span><span>{html.escape(str(value))}</span></li>"
+        for label, value in info_pairs
+    )
+    st.markdown(
+        f"""
+        <div class="card {'accent' if accent else ''}">
+            <div class="card-title">{html.escape(title)}</div>
+            <ul>{items}</ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_text_card(title: str, text: str, accent: bool = False) -> None:
+    """Render a text block inside a stylized card."""
+    safe_text = html.escape(text or "")
+    st.markdown(
+        f"""
+        <div class="card {'accent' if accent else ''}">
+            <div class="card-title">{html.escape(title)}</div>
+            <p style="margin:0; line-height:1.5;">{safe_text}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 st.title("🏦 Loan Assistant Console")
 st.write("Ask any loan-related question or request a loan evaluation.")
@@ -50,12 +148,18 @@ with st.sidebar:
 # User Input Section
 # ===========================================================
 
-user_text = st.text_input(
-    "Enter your question or loan request:",
-    placeholder="e.g., What is the policy for high-risk loans? OR Evaluate loan for Andy",
-)
-
-submit = st.button("Submit", use_container_width=True)
+# Wide textarea keeps long prompts comfortable while a skinny column
+# houses the CTA button for a tidy look across breakpoints.
+input_col, button_col = st.columns([4, 1])
+with input_col:
+    user_text = st.text_area(
+        "Enter your question or loan request:",
+        placeholder="Ask for policy guidance or request a customer evaluation...",
+        height=140,
+    )
+with button_col:
+    st.markdown("\n\n")
+    submit = st.button("Submit", use_container_width=True)
 
 # ===========================================================
 # Handle user input
@@ -67,8 +171,8 @@ if submit:
     else:
         with st.spinner("Processing your request..."):
             result = handle_user_input(user_text)
-
         # ---------------------------
+        # Determine response type and render matching view
         # ERROR HANDLING
         # ---------------------------
         if result.get("type") == "error":
@@ -79,8 +183,7 @@ if submit:
         # GENERAL Q&A RESPONSE
         # ---------------------------
         elif result.get("type") == "qa":
-            st.success("Answer:")
-            st.write(result.get("answer", "No answer provided."))
+            render_text_card("Answer", result.get("answer", "No answer provided."), accent=True)
             st.session_state.pending_application = None
 
         # ---------------------------
@@ -93,17 +196,40 @@ if submit:
 
             st.header("📄 Loan Application Evaluation")
 
-            # Customer summary card
-            st.subheader("Customer Information")
-            st.json(customer)
+            # Customer & assessment snapshot
+            info_col, assessment_col = st.columns(2, gap="large")
 
-            # AI recommendation
-            st.subheader("AI Assessment Summary")
-            st.json(assessment)
+            customer_pairs = [
+                ("Customer ID", customer.get("id", "—")),
+                ("Name", customer.get("name", "—")),
+                ("Nationality", customer.get("nationality", "—")),
+                ("PR Status", customer.get("pr_status", "—")),
+                ("Account Status", customer.get("account_status", "—")),
+                ("Credit Score", customer.get("credit_score", "—")),
+            ]
 
-            # Long Memo / Letter
-            st.subheader("AI Draft Letter / Memo")
-            st.write(memo)
+            assessment_pairs = [
+                ("AI Recommendation", assessment.get("ai_recommendation", "Pending")),
+                ("Risk Tier", assessment.get("risk", "Unknown")),
+                ("Interest Rate", assessment.get("interest_rate", "Not set")),
+                ("PR Status Used", assessment.get("pr_status_used", "—")),
+            ]
+
+            with info_col:
+                render_info_card("Customer Snapshot", customer_pairs)
+            with assessment_col:
+                render_info_card("AI Assessment", assessment_pairs, accent=True)
+
+            policy_notes = assessment.get("policy_notes") or ""
+            if policy_notes:
+                render_text_card("Policy Evidence", policy_notes)
+
+            with st.expander("AI Draft Letter / Memo", expanded=True):
+                safe_memo = html.escape(memo or "No memo provided.")
+                st.markdown(
+                    f'<div class="memo-box">{safe_memo}</div>',
+                    unsafe_allow_html=True,
+                )
 
             # Store pending application for officer approval
             st.session_state.pending_application = {
@@ -135,6 +261,7 @@ if st.session_state.pending_application:
         key="officer_decision",
     )
 
+    # Officers must provide a justification to satisfy audit/compliance needs.
     reason = st.text_area(
         "Loan officer justification (required):",
         key="officer_reason",

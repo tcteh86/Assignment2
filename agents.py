@@ -1,3 +1,5 @@
+"""Core loan assistant logic backed by CrewAI and FAISS-powered policy RAG."""
+
 import json
 import logging
 import os
@@ -60,12 +62,13 @@ def clean_str(value: Any, default: str = "Unknown") -> str:
 
 
 def load_customer_data(customer_input: str) -> Optional[Dict[str, Any]]:
-    """Return a unified customer object based on the three CSV files."""
+    """Return a unified customer object from CSV slices without merging tables."""
     try:
         credit_df = pd.read_csv("data/credit_scores.csv")
         account_df = pd.read_csv("data/account_status.csv")
         pr_df = pd.read_csv("data/pr_status.csv")
 
+        # Normalize all IDs up front so cross-file joins stay reliable.
         for df in (credit_df, account_df, pr_df):
             df["ID"] = df["ID"].astype(str)
 
@@ -141,7 +144,7 @@ def load_customer_data(customer_input: str) -> Optional[Dict[str, Any]]:
 # ===========================================================
 
 def setup_rag() -> Optional[FAISS]:
-    """Build a FAISS index for the policy PDF documents."""
+    """Build a FAISS index over policy PDFs so the LLM can cite official rules."""
     try:
         policy_dir = "policies"
         docs = []
@@ -156,6 +159,7 @@ def setup_rag() -> Optional[FAISS]:
             if fname.lower().endswith(".pdf"):
                 path = os.path.join(policy_dir, fname)
                 loader = PyPDFLoader(path)
+                # Each PDF page becomes a LangChain Document used downstream for RAG.
                 docs.extend(loader.load())
 
         if not docs:
@@ -175,7 +179,7 @@ def setup_rag() -> Optional[FAISS]:
 
 
 def get_policy_db() -> Optional[FAISS]:
-    """Return a cached FAISS store so we do not rebuild on every request."""
+    """Return (and lazily cache) the FAISS store so every Streamlit run shares it."""
     global _POLICY_DB
     if _POLICY_DB is None:
         _POLICY_DB = setup_rag()
@@ -183,7 +187,7 @@ def get_policy_db() -> Optional[FAISS]:
 
 
 def build_policy_tool(policy_db):
-    """Wrap the FAISS policy index into a CrewAI tool."""
+    """Wrap the FAISS policy index into a CrewAI tool so agents can call RAG."""
     if policy_db is None:
         return None
 
@@ -195,6 +199,7 @@ def build_policy_tool(policy_db):
             if not text:
                 return "Empty policy query."
 
+            # Similarity search gives the agent up to 5 dense-retrieved passages.
             docs = policy_db.similarity_search(text, k=5)
             if not docs:
                 return "No relevant policy sections found."
@@ -218,6 +223,7 @@ def build_customer_and_policy_tools(policy_db) -> List[Any]:
     def customer_data_lookup(query: Any) -> str:
         """Lookup a customer profile by ID or exact name and return JSON."""
         try:
+            # The tool is intentionally thin: just bridge CrewAI to Python I/O.
             data = load_customer_data(str(query))
             if data is None:
                 return "Customer not found."
@@ -299,6 +305,7 @@ def normalize_loan_response(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
         letter = payload.get("letter", "")
 
+        # Hard guardrails so the UI never displays policy-light loan decisions.
         if not str(assessment_summary["policy_notes"]).strip():
             return {
                 "type": "error",
@@ -342,10 +349,12 @@ def normalize_loan_response(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def run_unified_pipeline(user_text: str, tools: List[Any]) -> Dict[str, Any]:
+    """Execute the single-agent pipeline that blends RAG + customer data tools."""
     prompt = load_prompt("unified_agent.md").strip()
     if not prompt:
         prompt = "You are a cautious loan assistant. Always return valid JSON as instructed."
 
+    # Single agent keeps reasoning consistent and avoids sync issues.
     agent = Agent(
         role="Unified Loan Assistant",
         goal=prompt,
@@ -387,6 +396,7 @@ def run_unified_pipeline(user_text: str, tools: List[Any]) -> Dict[str, Any]:
 # ===========================================================
 
 def handle_user_input(user_text: str) -> Dict[str, Any]:
+    """Streamlit entry point: validate, ensure tooling, and run the LLM."""
     try:
         text = (user_text or "").strip()
         if not text:
