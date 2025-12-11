@@ -67,6 +67,28 @@ st.markdown(
         background: rgba(15, 23, 42, 0.04);
         border: 1px dashed rgba(15, 23, 42, 0.2);
     }
+    .approval-progress {
+        margin-top: 0.6rem;
+    }
+    .approval-progress__track {
+        width: 100%;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.08);
+        overflow: hidden;
+        box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+    }
+    .approval-progress__fill {
+        height: 100%;
+        background: linear-gradient(90deg, #16a34a, #22c55e);
+        transition: width 0.4s ease;
+    }
+    .approval-progress__label {
+        margin-top: 0.35rem;
+        font-weight: 600;
+        color: #0f172a;
+        font-size: 0.95rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -119,47 +141,58 @@ if "decision_stats" not in st.session_state:
     st.session_state.decision_stats = {"approved": 0, "rejected": 0}
 
 
+def render_decision_stats_sidebar(placeholder=None) -> None:
+    """Render sidebar metrics based on the latest decision stats."""
+    if placeholder is None:
+        target = st.sidebar
+    else:
+        placeholder.empty()
+        target = placeholder.container()
+    with target:
+        st.header("📊 Decision Stats")
+        approved = st.session_state.decision_stats["approved"]
+        rejected = st.session_state.decision_stats["rejected"]
+        total = approved + rejected
+        st.metric("Approved", approved)
+        st.metric("Rejected", rejected)
+        st.metric("Total Decisions", total)
+        if total:
+            approval_rate = approved / total * 100.0
+            fill_percent = min(max(approval_rate, 0.0), 100.0)
+            st.markdown(
+                f"""
+                <div class="approval-progress">
+                    <div class="approval-progress__track">
+                        <div class="approval-progress__fill" style="width: {fill_percent:.1f}%;"></div>
+                    </div>
+                    <div class="approval-progress__label">Approval rate: {approval_rate:.1f}%</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("No decisions recorded yet.")
+
+
 # ===========================================================
 # Sidebar statistics dashboard
 # ===========================================================
 
-with st.sidebar:
-    st.header("📊 Decision Stats")
-    total = (
-        st.session_state.decision_stats["approved"]
-        + st.session_state.decision_stats["rejected"]
-    )
-    st.metric("Approved", st.session_state.decision_stats["approved"])
-    st.metric("Rejected", st.session_state.decision_stats["rejected"])
-    st.metric("Total Decisions", total)
-    if total:
-        approval_rate = (
-            st.session_state.decision_stats["approved"] / total * 100.0
-        )
-        st.progress(
-            min(max(approval_rate / 100.0, 0.0), 1.0),
-            text=f"Approval rate: {approval_rate:.1f}%",
-        )
-    else:
-        st.info("No decisions recorded yet.")
+sidebar_placeholder = st.sidebar.empty()
+render_decision_stats_sidebar(sidebar_placeholder)
 
 
 # ===========================================================
 # User Input Section
 # ===========================================================
 
-# Wide textarea keeps long prompts comfortable while a skinny column
-# houses the CTA button for a tidy look across breakpoints.
-input_col, button_col = st.columns([4, 1])
-with input_col:
-    user_text = st.text_area(
-        "Enter your question or loan request:",
-        placeholder="Ask for policy guidance or request a customer evaluation...",
-        height=140,
-    )
-with button_col:
-    st.markdown("\n\n")
-    submit = st.button("Submit", use_container_width=True)
+# Wide textarea with the CTA button stacked below for clearer flow.
+user_text = st.text_area(
+    "Enter your question or loan request:",
+    placeholder="Ask for policy guidance or request a customer evaluation...",
+    height=140,
+)
+submit = st.button("Submit", use_container_width=True)
 
 # ===========================================================
 # Handle user input
@@ -283,3 +316,4 @@ if st.session_state.pending_application:
             st.write(reason.strip())
             st.json(st.session_state.pending_application)
             st.session_state.pending_application = None
+            render_decision_stats_sidebar(sidebar_placeholder)
