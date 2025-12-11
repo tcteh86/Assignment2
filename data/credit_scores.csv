@@ -1,36 +1,36 @@
-ID,Name,Email,CreditScore
-1111,Loren,loren@gmail.com,455
-2222,Matt,matt@yahoo.com 685,685
-3333,Hilda,hilda@gmail.com,825
-4444,Andy,andy@gmail.com,840
-5555,Kit,kit@yahoo.com,350
-6666,Brenda Palmer,brenda.palmer@gmail.com,670
-6676,Anmol Chana,anmol.chana@hotmail.com,524
-6686,Yeongho Bak,yeongho.bak@hotmail.com,441
-6696,Ruth Wilkinson,ruth.wilkinson@hotmail.com,821
-6706,Gamblang Farida,gamblang.farida@hotmail.com,805
-6716,Myeongja Gim,myeongja.gim@zoho.com,393
-6726,Samantha Ruiz,samantha.ruiz@hotmail.com,348
-6736,Eta Narang,eta.narang@zoho.com,412
-6746,Chatura Babu,chatura.babu@yahoo.com,456
-6756,Oakhrphnth Nirahani,oakhrphnth.nirahani@hotmail.com,463
-6766,Jing Shao,jing.shao@gmail.com,732
-6776,Kelly Mitchell,kelly.mitchell@hotmail.com,365
-6786,Jaeho Mun,jaeho.mun@hotmail.com,694
-6796,Mijeong Choe,mijeong.choe@hotmail.com,690
-6806,Kruetemth Aithysuchat,kruetemth.aithysuchat@yahoo.com,779
-6816,Lawrence Dixon,lawrence.dixon@yahoo.com,841
-6826,Xiulan Cui,xiulan.cui@yahoo.com,557
-6836,Jeongsun I,jeongsun.i@gmail.com,311
-6846,Nathphicha Thnupkrn,nathphicha.thnupkrn@yahoo.com,417
-6856,Karya Megantara,karya.megantara@gmail.com,849
-6866,Xiulan Zhang,xiulan.zhang@yahoo.com,573
-6876,Jais Tamba,jais.tamba@yahoo.com,648
-6886,Donald Marshall,donald.marshall@yahoo.com,414
-6896,Mitchell Jones,mitchell.jones@yahoo.com,600
-6906,Hli Edchkhum,hli.edchkhum@zoho.com,745
-6916,Ika Wibisono,ika.wibisono@gmail.com,461
-6926,Kimura Naoko,kimura.naoko@zoho.com,764
-6936,Ogawa Ryousuke,ogawa.ryousuke@yahoo.com,303
-6946,Vega Santoso,vega.santoso@gmail.com,569
-6956,Juwon Jin,juwon.jin@zoho.com,812
+ID,CreditScore
+1111,455
+2222,685
+3333,825
+4444,840
+5555,350
+6666,670
+6676,524
+6686,441
+6696,821
+6706,805
+6716,393
+6726,348
+6736,412
+6746,456
+6756,463
+6766,732
+6776,365
+6786,694
+6796,690
+6806,779
+6816,841
+6826,557
+6836,311
+6846,417
+6856,849
+6866,573
+6876,648
+6886,414
+6896,600
+6906,745
+6916,461
+6926,764
+6936,303
+6946,569
+6956,812

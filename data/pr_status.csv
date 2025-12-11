@@ -1,18 +1,18 @@
-ID,Name,Email,PRStatus
-2222,Matt,matt@yahoo.com,True
-4444,Andy,andy@gmail.com,False
-6666,Brenda Palmer,brenda.palmer@gmail.com,True
-6686,Yeongho Bak,yeongho.bak@hotmail.com,True
-6736,Eta Narang,eta.narang@zoho.com,True
-6756,Oakhrphnth Nirahani,oakhrphnth.nirahani@hotmail.com,False
-6776,Kelly Mitchell,kelly.mitchell@hotmail.com,True
-6786,Jaeho Mun,jaeho.mun@hotmail.com,False
-6796,Mijeong Choe,mijeong.choe@hotmail.com,False
-6816,Lawrence Dixon,lawrence.dixon@yahoo.com,True
-6826,Xiulan Cui,xiulan.cui@yahoo.com,True
-6836,Jeongsun I,jeongsun.i@gmail.com,False
-6866,Xiulan Zhang,xiulan.zhang@yahoo.com,False
-6896,Mitchell Jones,mitchell.jones@yahoo.com,False
-6906,Hli Edchkhum,hli.edchkhum@zoho.com,False
-6936,Ogawa Ryousuke,ogawa.ryousuke@yahoo.com,False
-6956,Juwon Jin,juwon.jin@zoho.com,True
+ID,Name,PRStatus
+2222,Matt,True
+4444,Andy,False
+6666,Brenda Palmer,True
+6686,Yeongho Bak,True
+6736,Eta Narang,True
+6756,Oakhrphnth Nirahani,False
+6776,Kelly Mitchell,True
+6786,Jaeho Mun,False
+6796,Mijeong Choe,False
+6816,Lawrence Dixon,True
+6826,Xiulan Cui,True
+6836,Jeongsun I,False
+6866,Xiulan Zhang,False
+6896,Mitchell Jones,False
+6906,Hli Edchkhum,False
+6936,Ogawa Ryousuke,False
+6956,Juwon Jin,True
