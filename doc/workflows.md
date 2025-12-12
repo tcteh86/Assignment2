@@ -1,5 +1,8 @@
 # Operational Workflows
 
+## 0. Startup Warm-up
+- `app.py` invokes `warm_policy_cache()` before rendering any UI. The Streamlit page surfaces an error banner if the FAISS index cannot be built (missing PDFs, embedding download failure, etc.), preventing officers from entering requests until RAG evidence is available.
+
 ## 1. User Interaction Flow
 ```mermaid
 sequenceDiagram
@@ -23,6 +26,8 @@ sequenceDiagram
     U->>UI: Approve / Reject + reason
     UI->>U: Confirmation + stats update
 ```
+
+Every interaction follows the enforced tool order: `CustomerDataLookup` runs first, immediately followed by `PolicyRetriever`, even for lightweight QA queries. This mirrors the instructions in `prompts/unified_agent.md` and guarantees the agent drafts answers with both fresh customer context and policy evidence.
 
 ## 2. Loan Application Decision Flow
 ```mermaid
@@ -66,4 +71,3 @@ graph LR
 | `policy_unavailable` | FAISS index failure or missing PDFs | Streamlit error |
 | `llm_output_parse_error` | Agent returns malformed JSON | Streamlit error |
 | `policy_evidence_missing` | LLM omitted policy-based risk/interest | Streamlit error prompting re-run |
-

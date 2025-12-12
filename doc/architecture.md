@@ -25,7 +25,7 @@ C4Context
 ## 2. Component Breakdown
 | Component | Responsibility | Key Tech |
 |-----------|----------------|----------|
-| `app.py` | Streamlit UI, session state, approval workflow, stats sidebar, policy evidence display | Streamlit, Python |
+| `app.py` | Streamlit UI, session state, approval workflow, stats sidebar, policy evidence display, FAISS warm-up gate | Streamlit, Python |
 | `agents.py` | Data access, FAISS caching, tool registration, unified agent orchestration | CrewAI, LangChain, pandas, SentenceTransformerEmbeddings |
 | `/data/*.csv` | Source-of-truth tables for credit scores, account status, PR status | CSV, pandas |
 | `/policies/*.pdf` | Official lending policies indexed for RAG | PDF + FAISS |
@@ -60,9 +60,9 @@ graph TD
 - Unified agent must emit the schema defined in `prompts/unified_agent.md`. Streamlit trusts that structure when rendering.
 
 ## 6. Observability
-- `logging` module prints to stdout and `loan_agents.log` (if configured by the user) with INFO-level events for FAISS caching and policy retrieval errors.
+- `logging` writes to both stdout and the file defined by `LOAN_AGENT_LOG_PATH` (default `loan_agents.log`). The configuration now captures DEBUG-level traces for FAISS cache hits/misses, making it easier to diagnose “policy database” failures during import or warm-up.
 
 ## 7. Future Enhancements
 1. Replace CSVs with a relational read replica (PostgreSQL) and add caching/invalidation.
 2. Persist officer decisions to a database or audit ledger.
-3. Wrap FAISS cache in a background task to pre-build at startup.
+3. Add a lightweight health-check endpoint (or Streamlit status widget) that validates policy PDFs and embedding availability so support teams can detect RAG regressions without running a full request.

@@ -28,9 +28,9 @@ graph TD
    - Errors (missing credit, PR status, etc.) short-circuit the flow.
 3. **Policy Retrieval (RAG)**
    - PDFs in `/policies` → `PyPDFLoader` → chunked via `RecursiveCharacterTextSplitter` → embedded with `SentenceTransformerEmbeddings` → FAISS index.
-   - Cached in-memory for session reuse.
+   - Cached in-memory for session reuse and pre-built at Streamlit startup via `warm_policy_cache()` so the first officer request never waits on embedding downloads.
 4. **Unified LLM Pipeline**
-   - Prompt defined in `prompts/unified_agent.md` enforces JSON schema and compliance rules.
+   - Prompt defined in `prompts/unified_agent.md` enforces JSON schema, mandatory tool order (CustomerDataLookup → PolicyRetriever on every query), and the non-conservative recommendation posture.
    - `run_unified_pipeline` orchestrates CrewAI and normalizes outputs, rejecting responses without policy evidence.
 5. **UI Rendering**
    - Customer and assessment cards highlight key facts.
