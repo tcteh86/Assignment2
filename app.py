@@ -1,277 +1,328 @@
+"""Streamlit UI for the loan assistant with modern cards and officer workflow."""
+
+import html
+
 import streamlit as st
-from agents import process_customer, answer_loan_question
+
+from agents import handle_user_input, warm_policy_cache
 
 
-# -----------------------------------------------------------
-# Initialize session state
-# -----------------------------------------------------------
-if "applications" not in st.session_state:
-    st.session_state.applications = []
+# Prebuild FAISS so the first Streamlit interaction doesn’t block on embeddings.
+POLICY_CACHE_READY = warm_policy_cache()
 
-if "current_application" not in st.session_state:
-    st.session_state.current_application = None
+# ===========================================================
+# Streamlit Page Setup
+# ===========================================================
 
-if "loan_qa" not in st.session_state:
-    st.session_state.loan_qa = None
+st.set_page_config(page_title="Loan Assistant", layout="wide")
 
-# -----------------------------------------------------------
-# Helper functions
-# -----------------------------------------------------------
-
-def status_badge(status):
-    """Return colored HTML badge for Approved / Rejected / Pending."""
-    if status.lower() == "approved":
-        color = "#2ecc71"  # green
-    elif status.lower() == "rejected":
-        color = "#e74c3c"  # red
-    else:
-        color = "#f1c40f"  # yellow
-
-    return f"""
-        <span style="
-            background:{color};
-            padding:4px 10px;
-            border-radius:12px;
-            color:white;
-            font-weight:600;">
-            {status}
-        </span>
-    """
-
-
-def card(title, content):
-    """Reusable card component."""
-    return f"""
-        <div style="
-            border:1px solid #DDD;
-            padding:15px;
-            border-radius:10px;
-            margin-top:10px;
-            background:#fafafa;">
-            <h4 style='margin-bottom:8px;'>{title}</h4>
-            <div>{content}</div>
-        </div>
-    """
-
-# -----------------------------------------------------------
-# Evaluate Customer
-# -----------------------------------------------------------
-def evaluate_customer(customer_input):
-    with st.spinner("🔎 Evaluating customer…"):
-        result = process_customer(customer_input)
-
-    st.session_state.current_application = {
-        "customer": customer_input,
-        "customer_name": result.get("customer_name"),
-        "nationality": result.get("nationality"),
-        "pr_status": result.get("pr_status"),
-        "ai_decision": result.get("decision", "Pending").capitalize(),
-        "risk": result.get("risk"),
-        "rate": result.get("rate"),
-        "memo": result.get("output"),
-    }
-
-def ask_loan_question(question: str):
-    """Call the backend QA pipeline and store the result in session state."""
-    with st.spinner("🤖 Answering your question…"):
-        result = answer_loan_question(question)
-
-    st.session_state.loan_qa = result
-
-# -----------------------------------------------------------
-# Save officer decision to history
-# -----------------------------------------------------------
-def save_officer_decision(choice):
-    app = st.session_state.current_application
-    if not app:
-        st.error("No active evaluation.")
-        return
-
-    st.session_state.applications.append({
-        **app,
-        "decision": choice,
-    })
-
-    st.success(f"Loan Officer Decision Saved: {choice}")
-    st.session_state.current_application = None
-
-
-# -----------------------------------------------------------
-# MAIN UI
-# -----------------------------------------------------------
-st.set_page_config(page_title="Loan Dashboard", layout="wide")
-
-st.title("🏦 Loan Evaluation")
-st.write("One Stop page for Loan applications and Questions.")
-
-st.divider()
-col_left, col_right = st.columns([1, 1])
-
-
-# -----------------------------------------------------------
-# Loan question section (runs independently of evaluation)
-# -----------------------------------------------------------
-
-with col_right:
-
-    st.subheader("")
-
-   
-with col_left:
-
-    st.subheader("💬 Ask a Loan Question")
-
-    question_text = st.text_input(
-        "Ask a loan-related question about a single customer (use their exact name or ID):",
-        key="loan_question_input",
+if not POLICY_CACHE_READY:
+    st.error(
+        "Policy database failed to load. Ensure policy PDFs are present and reload the app."
     )
 
+# Inject a lightweight design system to modernize Streamlit's default look.
+# Helper renderers and layout utilities
 
-    if st.button("Ask Question", use_container_width=True):
-        if not question_text.strip():
-            st.warning("Please enter a question first.")
-        else:
-            ask_loan_question(question_text)
+st.markdown(
+    """
+    <style>
+    :root {
+        --card-bg: rgba(255, 255, 255, 0.85);
+        --card-border: rgba(15, 23, 42, 0.1);
+        --card-shadow: 0 15px 30px rgba(15, 23, 42, 0.08);
+        --accent-bg: linear-gradient(135deg, #2563eb, #7c3aed);
+    }
+    .card {
+        padding: 1.2rem 1.5rem;
+        margin-bottom: 1rem;
+        border-radius: 18px;
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        box-shadow: var(--card-shadow);
+    }
+    .card.accent {
+        background: var(--accent-bg);
+        color: #fff;
+    }
+    .card-title {
+        font-weight: 600;
+        font-size: 1rem;
+        margin-bottom: 0.6rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .card ul {
+        list-style: none;
+        padding-left: 0;
+        margin: 0;
+    }
+    .card ul li {
+        display: flex;
+        justify-content: space-between;
+        padding: 0.35rem 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    }
+    .card ul li:last-child {
+        border-bottom: none;
+    }
+    .card ul li span {
+        font-weight: 600;
+        opacity: 0.85;
+    }
+    .memo-box {
+        border-radius: 16px;
+        padding: 1.5rem;
+        background: rgba(15, 23, 42, 0.04);
+        border: 1px dashed rgba(15, 23, 42, 0.2);
+    }
+    .approval-progress {
+        margin-top: 0.6rem;
+    }
+    .approval-progress__track {
+        width: 100%;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.08);
+        overflow: hidden;
+        box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+    }
+    .approval-progress__fill {
+        height: 100%;
+        background: linear-gradient(90deg, #16a34a, #22c55e);
+        transition: width 0.4s ease;
+    }
+    .approval-progress__label {
+        margin-top: 0.35rem;
+        font-weight: 600;
+        color: #0f172a;
+        font-size: 0.95rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-    # Show the latest QA result, if any
-    qa_result = st.session_state.get("loan_qa")
 
-    if qa_result:
-        st.markdown("### 🤖 AI Answer")
-        if qa_result.get("answer"):
-            st.write(qa_result["answer"])
-
-        # Friendly handling when there is an error
-        if qa_result.get("error") and not qa_result.get("answer"):
-            st.info(
-                "I couldn't fully answer that question. "
-                f"Details: {qa_result.get('error')}"
-            )
-
-        # Structured JSON context (if available) — your Option C
-        if qa_result.get("context"):
-            with st.expander("📦 See evaluated loan details (JSON)", expanded=False):
-                st.json(qa_result["context"])
-
-
-# -----------------------------------------------------------
-# Show AI evaluation block
-# -----------------------------------------------------------
-app = st.session_state.current_application
-
-if app:
-    st.subheader("📌 Customer Summary")
-
-    st.markdown(card(
-        "Customer Details",
-        f"""
-        <b>Name:</b> {app['customer_name']}<br>
-        <b>Nationality:</b> {app['nationality']}<br>
-        <b>PR Status:</b> {app['pr_status']}<br>
-        """
-    ), unsafe_allow_html=True)
-
-    # -------- AI Decision Summary --------
-    st.subheader("🤖 AI Evaluation Summary")
-
-    badge_html = status_badge(app["ai_decision"])
-    st.markdown(card(
-        "AI Decision",
-        f"""
-        <b>Status:</b> {badge_html}<br><br>
-        <b>Risk Level:</b> {app['risk']}<br>
-        <b>Suggested Interest Rate:</b> {app['rate']}
-        """
-    ), unsafe_allow_html=True)
-
-    # -------- Formal Letter --------
-    st.subheader("📄 AI-Generated Formal Letter")
+def render_info_card(title: str, info_pairs, accent: bool = False) -> None:
+    """Render a stylized card with label/value rows."""
+    if not info_pairs:
+        return
+    items = "".join(
+        f"<li><span>{html.escape(str(label))}</span><span>{html.escape(str(value))}</span></li>"
+        for label, value in info_pairs
+    )
     st.markdown(
         f"""
-        <div style="
-            padding:15px;
-            border:1px solid #ccc;
-            background:white;
-            border-radius:10px;">
-            {app["memo"]}
+        <div class="card {'accent' if accent else ''}">
+            <div class="card-title">{html.escape(title)}</div>
+            <ul>{items}</ul>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # -------- Officer Review --------
-    st.subheader("🧑‍💼 Loan Officer Decision")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("✔️ Approve Loan", use_container_width=True):
-            save_officer_decision("Approved")
+def render_text_card(title: str, text: str, accent: bool = False) -> None:
+    """Render a text block inside a stylized card."""
+    safe_text = html.escape(text or "")
+    st.markdown(
+        f"""
+        <div class="card {'accent' if accent else ''}">
+            <div class="card-title">{html.escape(title)}</div>
+            <p style="margin:0; line-height:1.5;">{safe_text}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    with col2:
-        if st.button("❌ Reject Loan", use_container_width=True):
-            save_officer_decision("Rejected")
+st.title("🏦 Loan Assistant Console")
+st.write("Ask any loan-related question or request a loan evaluation.")
 
+# Initialize session state for storing loan evaluations awaiting officer decision
+if "pending_application" not in st.session_state:
+    st.session_state.pending_application = None
+if "officer_decision" not in st.session_state:
+    st.session_state.officer_decision = "Approve"
+if "officer_reason" not in st.session_state:
+    st.session_state.officer_reason = ""
+if "decision_stats" not in st.session_state:
+    st.session_state.decision_stats = {"approved": 0, "rejected": 0}
+
+
+def render_decision_stats_sidebar(placeholder=None) -> None:
+    """Render sidebar metrics based on the latest decision stats."""
+    if placeholder is None:
+        target = st.sidebar
+    else:
+        placeholder.empty()
+        target = placeholder.container()
+    with target:
+        st.header("📊 Decision Stats")
+        approved = st.session_state.decision_stats["approved"]
+        rejected = st.session_state.decision_stats["rejected"]
+        total = approved + rejected
+        st.metric("Approved", approved)
+        st.metric("Rejected", rejected)
+        st.metric("Total Decisions", total)
+        if total:
+            approval_rate = approved / total * 100.0
+            fill_percent = min(max(approval_rate, 0.0), 100.0)
+            st.markdown(
+                f"""
+                <div class="approval-progress">
+                    <div class="approval-progress__track">
+                        <div class="approval-progress__fill" style="width: {fill_percent:.1f}%;"></div>
+                    </div>
+                    <div class="approval-progress__label">Approval rate: {approval_rate:.1f}%</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.info("No decisions recorded yet.")
+
+
+# ===========================================================
+# Sidebar statistics dashboard
+# ===========================================================
+
+sidebar_placeholder = st.sidebar.empty()
+render_decision_stats_sidebar(sidebar_placeholder)
+
+
+# ===========================================================
+# User Input Section
+# ===========================================================
+
+# Wide textarea with the CTA button stacked below for clearer flow.
+user_text = st.text_area(
+    "Enter your question or loan request:",
+    placeholder="Ask for policy guidance or request a customer evaluation...",
+    height=140,
+)
+submit = st.button("Submit", use_container_width=True)
+
+# ===========================================================
+# Handle user input
+# ===========================================================
+
+if submit:
+    if not user_text.strip():
+        st.warning("Please enter a valid question.")
+    else:
+        with st.spinner("Processing your request..."):
+            result = handle_user_input(user_text)
+        # ---------------------------
+        # Determine response type and render matching view
+        # ERROR HANDLING
+        # ---------------------------
+        if result.get("type") == "error":
+            st.error(result.get("message", "Unknown error"))
+            st.session_state.pending_application = None
+
+        # ---------------------------
+        # GENERAL Q&A RESPONSE
+        # ---------------------------
+        elif result.get("type") == "qa":
+            render_text_card("Answer", result.get("answer", "No answer provided."), accent=True)
+            st.session_state.pending_application = None
+
+        # ---------------------------
+        # LOAN APPLICATION RESPONSE
+        # ---------------------------
+        elif result.get("type") == "loan_application":
+            customer = result.get("customer", {})
+            assessment = result.get("ai_assessment", {})
+            memo = result.get("letter", "")
+
+            st.header("📄 Loan Application Evaluation")
+
+            # Customer & assessment snapshot
+            info_col, assessment_col = st.columns(2, gap="large")
+
+            customer_pairs = [
+                ("Customer ID", customer.get("id", "—")),
+                ("Name", customer.get("name", "—")),
+                ("Nationality", customer.get("nationality", "—")),
+                ("PR Status", customer.get("pr_status", "—")),
+                ("Account Status", customer.get("account_status", "—")),
+                ("Credit Score", customer.get("credit_score", "—")),
+            ]
+
+            assessment_pairs = [
+                ("AI Recommendation", assessment.get("ai_recommendation", "Pending")),
+                ("Risk Tier", assessment.get("risk", "Unknown")),
+                ("Interest Rate", assessment.get("interest_rate", "Not set")),
+                ("PR Status Used", assessment.get("pr_status_used", "—")),
+            ]
+
+            with info_col:
+                render_info_card("Customer Snapshot", customer_pairs)
+            with assessment_col:
+                render_info_card("AI Assessment", assessment_pairs, accent=True)
+
+            policy_notes = assessment.get("policy_notes") or ""
+            if policy_notes:
+                render_text_card("Policy Evidence", policy_notes)
+
+            with st.expander("AI Draft Letter / Memo", expanded=True):
+                safe_memo = html.escape(memo or "No memo provided.")
+                st.markdown(
+                    f'<div class="memo-box">{safe_memo}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # Store pending application for officer approval
+            st.session_state.pending_application = {
+                "customer": customer,
+                "assessment": assessment,
+                "memo": memo,
+            }
+            ai_choice = assessment.get("ai_recommendation", "Approve").capitalize()
+            st.session_state.officer_decision = (
+                ai_choice if ai_choice in ("Approve", "Reject") else "Approve"
+            )
+            st.session_state.officer_reason = ""
+
+# ===========================================================
+# Officer Approval Section
+# ===========================================================
+
+if st.session_state.pending_application:
     st.divider()
+    st.header("📝 Loan Officer Decision")
+    st.info(
+        "The AI provides recommendations only. Please record the human loan officer's final decision."
+    )
 
+    decision = st.radio(
+        "Select a final decision:",
+        options=["Approve", "Reject"],
+        horizontal=True,
+        key="officer_decision",
+    )
 
-# ======================================================
-# 📊 Sidebar — Loan Dashboard (Improved Rendering)
-# ======================================================
+    # Officers must provide a justification to satisfy audit/compliance needs.
+    reason = st.text_area(
+        "Loan officer justification (required):",
+        key="officer_reason",
+        placeholder="Explain the rationale for approving or rejecting this application...",
+        help="Provide compliance-ready reasoning for the recorded decision.",
+    )
 
-st.sidebar.title("📊 Loan Dashboard")
-
-apps = st.session_state.applications
-
-# -----------------------------
-# 📈 Metrics
-# -----------------------------
-approved = sum(1 for a in apps if a.get("decision") == "Approved")
-rejected = sum(1 for a in apps if a.get("decision") == "Rejected")
-total = len(apps)
-
-st.sidebar.metric("Total Evaluations", total)
-st.sidebar.metric("Approved", approved)
-st.sidebar.metric("Rejected", rejected)
-
-st.sidebar.write("---")
-st.sidebar.subheader("📁 Recent Applications")
-
-# -----------------------------
-# 📦 Recent Application Cards
-# -----------------------------
-recent = list(reversed(apps[-10:]))
-
-if not recent:
-    st.sidebar.write("No evaluations yet.")
-else:
-    for app in recent:
-
-        # --- Safety: ensure missing fields don't break the UI ---
-        customer_name = app.get("customer_name", "Unknown")
-        customer_id   = app.get("customer", "N/A")
-        nationality   = app.get("nationality", "N/A")
-        pr_status     = app.get("pr_status", "N/A")
-        risk          = app.get("risk", "N/A")
-        rate          = app.get("rate", "N/A")
-        decision      = app.get("decision", "Unknown")
-
-        # --- Badge HTML (safe-rendered) ---
-        badge_html = status_badge(decision)
-
-        # --- Card body ---
-        body_html = f"""
-            {badge_html}<br><br>
-            <b>Nationality:</b> {nationality}<br>
-            <b>PR Status:</b> {pr_status}<br>
-            <b>Risk:</b> {risk}<br>
-            <b>Rate:</b> {rate}<br>
-        """
-
-        # --- Render card (your existing card helper) ---
-        st.sidebar.markdown(
-            card(
-                f"{customer_name} ({customer_id})",
-                body_html
-            ),
-            unsafe_allow_html=True,
-        )
+    if st.button("Record Final Decision", type="primary", use_container_width=True):
+        if not reason.strip():
+            st.warning("Please provide a justification before recording the decision.")
+        else:
+            if decision == "Approve":
+                st.success("Loan Approved ✔ (recorded)")
+                st.session_state.decision_stats["approved"] += 1
+            else:
+                st.error("Loan Rejected ✖ (recorded)")
+                st.session_state.decision_stats["rejected"] += 1
+            st.write("**Officer justification**")
+            st.write(reason.strip())
+            st.json(st.session_state.pending_application)
+            st.session_state.pending_application = None
+            render_decision_stats_sidebar(sidebar_placeholder)
