@@ -25,12 +25,38 @@ The UI talks to a single CrewAI agent that fuses:
 
 ## Setup
 
+The combination below is tested end-to-end with Python 3.10.12. Pinning these versions keeps CrewAI's LangChain bindings and FAISS' wheels aligned so the Streamlit app, RAG stack, and pytest suite all initialize cleanly.
+
+| Package | Version | Notes |
+| ------- | ------- | ----- |
+| streamlit | 1.36.0 | Stable UI build with `st.set_page_config` + themed cards used by the console. |
+| crewai | 0.36.21 | Exposes `Agent`, `Crew`, and `Task` APIs used in `agents.py`, plus the Windows signal patch still matches this release. |
+| langchain | 0.2.11 | Core abstractions that CrewAI expects; pairs with split community/text-splitter packages. |
+| langchain-community | 0.2.10 | Provides `PyPDFLoader`, `SentenceTransformerEmbeddings`, and FAISS wrappers. |
+| langchain-openai | 0.1.21 | Supplies the `ChatOpenAI` client used by the agent. |
+| langchain-text-splitters | 0.2.2 | Required for `RecursiveCharacterTextSplitter` import in `agents.py`. |
+| sentence-transformers | 2.7.0 | Matches LangChain's embedding wrapper; will pull in `torch 2.2.x` automatically (install CPU builds on M1/Windows if prompted). |
+| faiss-cpu | 1.8.0.post1 | Compatible with Python 3.10 wheels on macOS/Linux; powers the policy vector store. |
+| python-dotenv | 1.0.1 | Loads `.env` files before the agent boots. |
+| pandas | 2.2.2 | Used for CSV ingestion and guardrails. |
+| pytest | 8.3.2 | Runs the regression suite in `tests/`. |
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate           # Windows: .venv\Scripts\activate
 pip install --upgrade pip
-pip install streamlit crewai langchain langchain-community langchain-openai \
-            sentence-transformers faiss-cpu python-dotenv pandas pytest
+pip install \
+    streamlit==1.36.0 \
+    crewai==0.36.21 \
+    langchain==0.2.11 \
+    langchain-community==0.2.10 \
+    langchain-openai==0.1.21 \
+    langchain-text-splitters==0.2.2 \
+    sentence-transformers==2.7.0 \
+    faiss-cpu==1.8.0.post1 \
+    python-dotenv==1.0.1 \
+    pandas==2.2.2 \
+    pytest==8.3.2
 ```
 
 1. Create an `.env` in the repo root with `OPENAI_API_KEY=sk-...`.
