@@ -30,7 +30,7 @@ The combination below is tested end-to-end with Python 3.10.12. Pinning these ve
 | Package | Version | Notes |
 | ------- | ------- | ----- |
 | streamlit | 1.36.0 | Stable UI build with `st.set_page_config` + themed cards used by the console. |
-| crewai | 0.36.21 | Exposes `Agent`, `Crew`, and `Task` APIs used in `agents.py`, plus the Windows signal patch still matches this release. |
+| crewai | 0.36.1 | Latest 0.36.x build on PyPI; matches the agent APIs and Windows signal patch. |
 | langchain | 0.2.11 | Core abstractions that CrewAI expects; pairs with split community/text-splitter packages. |
 | langchain-community | 0.2.10 | Provides `PyPDFLoader`, `SentenceTransformerEmbeddings`, and FAISS wrappers. |
 | langchain-openai | 0.1.21 | Supplies the `ChatOpenAI` client used by the agent. |
@@ -41,13 +41,15 @@ The combination below is tested end-to-end with Python 3.10.12. Pinning these ve
 | pandas | 2.2.2 | Used for CSV ingestion and guardrails. |
 | pytest | 8.3.2 | Runs the regression suite in `tests/`. |
 
+> ℹ️ Use Python 3.10.x; Pip will skip newer CrewAI/LangChain builds that target 3.11+ and older ones that cap at 3.9, so sticking to the versions above avoids "Requires-Python" conflicts during install. If you see resolver errors mentioning `langchain-classic` or `langgraph-prebuilt`, uninstall those extras (or recreate the virtualenv) before running the pinned install—they hard-require `langchain-core>=1.0`, which conflicts with the tested LangChain 0.2.x stack here.
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate           # Windows: .venv\Scripts\activate
 pip install --upgrade pip
 pip install \
     streamlit==1.36.0 \
-    crewai==0.36.21 \
+    crewai==0.36.1 \
     langchain==0.2.11 \
     langchain-community==0.2.10 \
     langchain-openai==0.1.21 \
