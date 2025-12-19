@@ -1,328 +1,141 @@
-"""Streamlit UI for the loan assistant with modern cards and officer workflow."""
+"""Streamlit prototype for a GenAI-assisted loan risk assistant."""
 
-import html
+from __future__ import annotations
+
+import os
+from typing import Dict, List
 
 import streamlit as st
 
-from agents import handle_user_input, warm_policy_cache
+from services.llm import LLMClient
+from services.rag import retrieve_policy_rules
+from services.risk_engine import evaluate_application, normalize_application_form
 
 
-# Prebuild FAISS so the first Streamlit interaction doesn’t block on embeddings.
-POLICY_CACHE_READY = warm_policy_cache()
+st.set_page_config(page_title="GenAI Loan Risk Assistant", layout="wide")
 
-# ===========================================================
-# Streamlit Page Setup
-# ===========================================================
-
-st.set_page_config(page_title="Loan Assistant", layout="wide")
-
-if not POLICY_CACHE_READY:
-    st.error(
-        "Policy database failed to load. Ensure policy PDFs are present and reload the app."
-    )
-
-# Inject a lightweight design system to modernize Streamlit's default look.
-# Helper renderers and layout utilities
-
-st.markdown(
-    """
-    <style>
-    :root {
-        --card-bg: rgba(255, 255, 255, 0.85);
-        --card-border: rgba(15, 23, 42, 0.1);
-        --card-shadow: 0 15px 30px rgba(15, 23, 42, 0.08);
-        --accent-bg: linear-gradient(135deg, #2563eb, #7c3aed);
-    }
-    .card {
-        padding: 1.2rem 1.5rem;
-        margin-bottom: 1rem;
-        border-radius: 18px;
-        background: var(--card-bg);
-        border: 1px solid var(--card-border);
-        box-shadow: var(--card-shadow);
-    }
-    .card.accent {
-        background: var(--accent-bg);
-        color: #fff;
-    }
-    .card-title {
-        font-weight: 600;
-        font-size: 1rem;
-        margin-bottom: 0.6rem;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-    .card ul {
-        list-style: none;
-        padding-left: 0;
-        margin: 0;
-    }
-    .card ul li {
-        display: flex;
-        justify-content: space-between;
-        padding: 0.35rem 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-    }
-    .card ul li:last-child {
-        border-bottom: none;
-    }
-    .card ul li span {
-        font-weight: 600;
-        opacity: 0.85;
-    }
-    .memo-box {
-        border-radius: 16px;
-        padding: 1.5rem;
-        background: rgba(15, 23, 42, 0.04);
-        border: 1px dashed rgba(15, 23, 42, 0.2);
-    }
-    .approval-progress {
-        margin-top: 0.6rem;
-    }
-    .approval-progress__track {
-        width: 100%;
-        height: 10px;
-        border-radius: 999px;
-        background: rgba(15, 23, 42, 0.08);
-        overflow: hidden;
-        box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
-    }
-    .approval-progress__fill {
-        height: 100%;
-        background: linear-gradient(90deg, #16a34a, #22c55e);
-        transition: width 0.4s ease;
-    }
-    .approval-progress__label {
-        margin-top: 0.35rem;
-        font-weight: 600;
-        color: #0f172a;
-        font-size: 0.95rem;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
+st.title("🏦 GenAI-Assisted Loan Risk Assessment")
+st.write(
+    "This prototype demonstrates how a loan officer can triage applications with GenAI-backed "
+    "reasoning, policy citations, and human-in-the-loop controls."
 )
 
 
-def render_info_card(title: str, info_pairs, accent: bool = False) -> None:
-    """Render a stylized card with label/value rows."""
-    if not info_pairs:
-        return
-    items = "".join(
-        f"<li><span>{html.escape(str(label))}</span><span>{html.escape(str(value))}</span></li>"
-        for label, value in info_pairs
-    )
-    st.markdown(
-        f"""
-        <div class="card {'accent' if accent else ''}">
-            <div class="card-title">{html.escape(title)}</div>
-            <ul>{items}</ul>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+@st.cache_resource
+def _build_llm_client() -> LLMClient:
+    return LLMClient(api_key=os.getenv("OPENAI_API_KEY"))
 
 
-def render_text_card(title: str, text: str, accent: bool = False) -> None:
-    """Render a text block inside a stylized card."""
-    safe_text = html.escape(text or "")
-    st.markdown(
-        f"""
-        <div class="card {'accent' if accent else ''}">
-            <div class="card-title">{html.escape(title)}</div>
-            <p style="margin:0; line-height:1.5;">{safe_text}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+llm_client = _build_llm_client()
 
-st.title("🏦 Loan Assistant Console")
-st.write("Ask any loan-related question or request a loan evaluation.")
+with st.sidebar:
+    st.header("Configuration")
+    api_key_present = bool(os.getenv("OPENAI_API_KEY"))
+    st.metric("OPENAI_API_KEY set", "Yes" if api_key_present else "No")
+    st.caption("Set the OPENAI_API_KEY environment variable before running Streamlit.")
 
-# Initialize session state for storing loan evaluations awaiting officer decision
-if "pending_application" not in st.session_state:
-    st.session_state.pending_application = None
-if "officer_decision" not in st.session_state:
-    st.session_state.officer_decision = "Approve"
-if "officer_reason" not in st.session_state:
-    st.session_state.officer_reason = ""
-if "decision_stats" not in st.session_state:
-    st.session_state.decision_stats = {"approved": 0, "rejected": 0}
+col1, col2 = st.columns(2)
 
+with col1:
+    st.subheader("Loan Application Form")
+    with st.form("loan_form", clear_on_submit=False):
+        name = st.text_input("Full Name")
+        national_id = st.text_input("National ID / Passport")
+        age = st.number_input("Age", min_value=18, max_value=80, value=30)
+        employment_status = st.selectbox(
+            "Employment Status",
+            ["Salaried", "Self-Employed", "Contract", "Unemployed"],
+        )
+        monthly_income = st.number_input("Monthly Income (USD)", min_value=0.0, value=6000.0, step=500.0)
+        monthly_liabilities = st.number_input(
+            "Monthly Liabilities (USD)", min_value=0.0, value=1200.0, step=200.0
+        )
+        credit_score = st.number_input("Credit Score", min_value=300, max_value=850, value=700)
+        loan_amount = st.number_input("Requested Loan Amount (USD)", min_value=1000.0, value=50000.0, step=1000.0)
+        loan_purpose = st.text_area(
+            "Loan Purpose",
+            placeholder="E.g., debt consolidation, education, home renovation, small business",
+        )
+        documents_provided = st.multiselect(
+            "Documents Provided",
+            options=[
+                "Government ID",
+                "Bank Statements (3 months)",
+                "Employment Letter",
+                "Tax Return",
+                "Collateral Documentation",
+            ],
+        )
+        existing_customer = st.checkbox("Existing customer")
+        human_review_toggle = st.checkbox("Mark for human review by default", value=False)
+        submitted = st.form_submit_button("Evaluate Application", type="primary")
 
-def render_decision_stats_sidebar(placeholder=None) -> None:
-    """Render sidebar metrics based on the latest decision stats."""
-    if placeholder is None:
-        target = st.sidebar
+form_data: Dict[str, List[str] | str | float | int | bool] = {
+    "name": name,
+    "national_id": national_id,
+    "age": age,
+    "employment_status": employment_status,
+    "monthly_income": monthly_income,
+    "monthly_liabilities": monthly_liabilities,
+    "credit_score": credit_score,
+    "loan_amount": loan_amount,
+    "loan_purpose": loan_purpose,
+    "documents_provided": documents_provided,
+    "existing_customer": existing_customer,
+    "human_review_toggle": human_review_toggle,
+}
+
+with col2:
+    st.subheader("Policy Retrieval")
+    normalized_snapshot = normalize_application_form(form_data)
+    policy_query = f"{normalized_snapshot['loan_purpose']} {normalized_snapshot['employment_status']}"
+    policies = retrieve_policy_rules(policy_query)
+    for policy in policies:
+        st.markdown(f"**{policy['id']} – {policy['title']}**")
+        st.caption(policy["text"])
+        st.progress(min(policy.get("score", 0.0), 1.0))
+
+if submitted:
+    with st.spinner("Running GenAI-assisted assessment..."):
+        assessment = evaluate_application(form_data, llm_client)
+
+    st.success("Assessment generated.")
+    st.subheader("AI Recommendation")
+    st.write(f"**Risk Level:** {assessment.risk_level}")
+    st.write(f"**Recommendation:** {assessment.recommendation}")
+    st.write(f"**Confidence:** {assessment.confidence:.2f}")
+
+    st.markdown("#### Rationale")
+    st.write(assessment.rationale)
+
+    st.markdown("#### Policy Citations")
+    if assessment.policy_citations:
+        for citation in assessment.policy_citations:
+            st.write(f"- {citation}")
     else:
-        placeholder.empty()
-        target = placeholder.container()
-    with target:
-        st.header("📊 Decision Stats")
-        approved = st.session_state.decision_stats["approved"]
-        rejected = st.session_state.decision_stats["rejected"]
-        total = approved + rejected
-        st.metric("Approved", approved)
-        st.metric("Rejected", rejected)
-        st.metric("Total Decisions", total)
-        if total:
-            approval_rate = approved / total * 100.0
-            fill_percent = min(max(approval_rate, 0.0), 100.0)
-            st.markdown(
-                f"""
-                <div class="approval-progress">
-                    <div class="approval-progress__track">
-                        <div class="approval-progress__fill" style="width: {fill_percent:.1f}%;"></div>
-                    </div>
-                    <div class="approval-progress__label">Approval rate: {approval_rate:.1f}%</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        else:
-            st.info("No decisions recorded yet.")
+        st.write("No specific citations returned.")
 
-
-# ===========================================================
-# Sidebar statistics dashboard
-# ===========================================================
-
-sidebar_placeholder = st.sidebar.empty()
-render_decision_stats_sidebar(sidebar_placeholder)
-
-
-# ===========================================================
-# User Input Section
-# ===========================================================
-
-# Wide textarea with the CTA button stacked below for clearer flow.
-user_text = st.text_area(
-    "Enter your question or loan request:",
-    placeholder="Ask for policy guidance or request a customer evaluation...",
-    height=140,
-)
-submit = st.button("Submit", use_container_width=True)
-
-# ===========================================================
-# Handle user input
-# ===========================================================
-
-if submit:
-    if not user_text.strip():
-        st.warning("Please enter a valid question.")
+    st.markdown("#### Highlighted Risks")
+    if assessment.highlighted_risks:
+        st.write("\n".join([f"- {item}" for item in assessment.highlighted_risks]))
     else:
-        with st.spinner("Processing your request..."):
-            result = handle_user_input(user_text)
-        # ---------------------------
-        # Determine response type and render matching view
-        # ERROR HANDLING
-        # ---------------------------
-        if result.get("type") == "error":
-            st.error(result.get("message", "Unknown error"))
-            st.session_state.pending_application = None
+        st.write("No critical risks flagged.")
 
-        # ---------------------------
-        # GENERAL Q&A RESPONSE
-        # ---------------------------
-        elif result.get("type") == "qa":
-            render_text_card("Answer", result.get("answer", "No answer provided."), accent=True)
-            st.session_state.pending_application = None
+    st.markdown("#### Follow-up Questions")
+    if assessment.follow_up_questions:
+        st.write("\n".join([f"- {item}" for item in assessment.follow_up_questions]))
+    else:
+        st.write("No follow-ups suggested.")
 
-        # ---------------------------
-        # LOAN APPLICATION RESPONSE
-        # ---------------------------
-        elif result.get("type") == "loan_application":
-            customer = result.get("customer", {})
-            assessment = result.get("ai_assessment", {})
-            memo = result.get("letter", "")
+    st.markdown("#### Missing Documents")
+    if assessment.missing_documents:
+        st.write("\n".join([f"- {item}" for item in assessment.missing_documents]))
+    else:
+        st.write("All core documents present.")
 
-            st.header("📄 Loan Application Evaluation")
+    st.markdown("#### Human Review")
+    requires_review = assessment.human_review_required or human_review_toggle
+    st.write("🔎 Human review required" if requires_review else "✅ Auto-approve possible (with officer sign-off)")
 
-            # Customer & assessment snapshot
-            info_col, assessment_col = st.columns(2, gap="large")
-
-            customer_pairs = [
-                ("Customer ID", customer.get("id", "—")),
-                ("Name", customer.get("name", "—")),
-                ("Nationality", customer.get("nationality", "—")),
-                ("PR Status", customer.get("pr_status", "—")),
-                ("Account Status", customer.get("account_status", "—")),
-                ("Credit Score", customer.get("credit_score", "—")),
-            ]
-
-            assessment_pairs = [
-                ("AI Recommendation", assessment.get("ai_recommendation", "Pending")),
-                ("Risk Tier", assessment.get("risk", "Unknown")),
-                ("Interest Rate", assessment.get("interest_rate", "Not set")),
-                ("PR Status Used", assessment.get("pr_status_used", "—")),
-            ]
-
-            with info_col:
-                render_info_card("Customer Snapshot", customer_pairs)
-            with assessment_col:
-                render_info_card("AI Assessment", assessment_pairs, accent=True)
-
-            policy_notes = assessment.get("policy_notes") or ""
-            if policy_notes:
-                render_text_card("Policy Evidence", policy_notes)
-
-            with st.expander("AI Draft Letter / Memo", expanded=True):
-                safe_memo = html.escape(memo or "No memo provided.")
-                st.markdown(
-                    f'<div class="memo-box">{safe_memo}</div>',
-                    unsafe_allow_html=True,
-                )
-
-            # Store pending application for officer approval
-            st.session_state.pending_application = {
-                "customer": customer,
-                "assessment": assessment,
-                "memo": memo,
-            }
-            ai_choice = assessment.get("ai_recommendation", "Approve").capitalize()
-            st.session_state.officer_decision = (
-                ai_choice if ai_choice in ("Approve", "Reject") else "Approve"
-            )
-            st.session_state.officer_reason = ""
-
-# ===========================================================
-# Officer Approval Section
-# ===========================================================
-
-if st.session_state.pending_application:
     st.divider()
-    st.header("📝 Loan Officer Decision")
-    st.info(
-        "The AI provides recommendations only. Please record the human loan officer's final decision."
-    )
-
-    decision = st.radio(
-        "Select a final decision:",
-        options=["Approve", "Reject"],
-        horizontal=True,
-        key="officer_decision",
-    )
-
-    # Officers must provide a justification to satisfy audit/compliance needs.
-    reason = st.text_area(
-        "Loan officer justification (required):",
-        key="officer_reason",
-        placeholder="Explain the rationale for approving or rejecting this application...",
-        help="Provide compliance-ready reasoning for the recorded decision.",
-    )
-
-    if st.button("Record Final Decision", type="primary", use_container_width=True):
-        if not reason.strip():
-            st.warning("Please provide a justification before recording the decision.")
-        else:
-            if decision == "Approve":
-                st.success("Loan Approved ✔ (recorded)")
-                st.session_state.decision_stats["approved"] += 1
-            else:
-                st.error("Loan Rejected ✖ (recorded)")
-                st.session_state.decision_stats["rejected"] += 1
-            st.write("**Officer justification**")
-            st.write(reason.strip())
-            st.json(st.session_state.pending_application)
-            st.session_state.pending_application = None
-            render_decision_stats_sidebar(sidebar_placeholder)
+    st.caption("Note: This is a prototype; AI output should always be validated by a human underwriter.")
