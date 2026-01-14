@@ -4,192 +4,36 @@ import html
 
 import streamlit as st
 
-from agents import handle_user_input, warm_policy_cache
-
-
-# Prebuild FAISS so the first Streamlit interaction doesn’t block on embeddings.
-POLICY_CACHE_READY = warm_policy_cache()
+from agents import handle_user_input
+from ui_components import (
+    append_history_entry,
+    apply_base_styles,
+    ensure_session_state,
+    get_policy_cache_ready,
+    render_decision_stats_sidebar,
+    render_info_card,
+    render_text_card,
+)
 
 # ===========================================================
 # Streamlit Page Setup
 # ===========================================================
 
 st.set_page_config(page_title="Loan Assistant", layout="wide")
+apply_base_styles()
+ensure_session_state()
 
-if not POLICY_CACHE_READY:
+policy_cache_ready = get_policy_cache_ready()
+if not policy_cache_ready:
     st.error(
         "Policy database failed to load. Ensure policy PDFs are present and reload the app."
     )
 
-# Inject a lightweight design system to modernize Streamlit's default look.
-# Helper renderers and layout utilities
-
-st.markdown(
-    """
-    <style>
-    :root {
-        --card-bg: rgba(255, 255, 255, 0.85);
-        --card-border: rgba(15, 23, 42, 0.1);
-        --card-shadow: 0 15px 30px rgba(15, 23, 42, 0.08);
-        --accent-bg: linear-gradient(135deg, #2563eb, #7c3aed);
-    }
-    .card {
-        padding: 1.2rem 1.5rem;
-        margin-bottom: 1rem;
-        border-radius: 18px;
-        background: var(--card-bg);
-        border: 1px solid var(--card-border);
-        box-shadow: var(--card-shadow);
-    }
-    .card.accent {
-        background: var(--accent-bg);
-        color: #fff;
-    }
-    .card-title {
-        font-weight: 600;
-        font-size: 1rem;
-        margin-bottom: 0.6rem;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-    .card ul {
-        list-style: none;
-        padding-left: 0;
-        margin: 0;
-    }
-    .card ul li {
-        display: flex;
-        justify-content: space-between;
-        padding: 0.35rem 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-    }
-    .card ul li:last-child {
-        border-bottom: none;
-    }
-    .card ul li span {
-        font-weight: 600;
-        opacity: 0.85;
-    }
-    .memo-box {
-        border-radius: 16px;
-        padding: 1.5rem;
-        background: rgba(15, 23, 42, 0.04);
-        border: 1px dashed rgba(15, 23, 42, 0.2);
-    }
-    .approval-progress {
-        margin-top: 0.6rem;
-    }
-    .approval-progress__track {
-        width: 100%;
-        height: 10px;
-        border-radius: 999px;
-        background: rgba(15, 23, 42, 0.08);
-        overflow: hidden;
-        box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
-    }
-    .approval-progress__fill {
-        height: 100%;
-        background: linear-gradient(90deg, #16a34a, #22c55e);
-        transition: width 0.4s ease;
-    }
-    .approval-progress__label {
-        margin-top: 0.35rem;
-        font-weight: 600;
-        color: #0f172a;
-        font-size: 0.95rem;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-def render_info_card(title: str, info_pairs, accent: bool = False) -> None:
-    """Render a stylized card with label/value rows."""
-    if not info_pairs:
-        return
-    items = "".join(
-        f"<li><span>{html.escape(str(label))}</span><span>{html.escape(str(value))}</span></li>"
-        for label, value in info_pairs
-    )
-    st.markdown(
-        f"""
-        <div class="card {'accent' if accent else ''}">
-            <div class="card-title">{html.escape(title)}</div>
-            <ul>{items}</ul>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def render_text_card(title: str, text: str, accent: bool = False) -> None:
-    """Render a text block inside a stylized card."""
-    safe_text = html.escape(text or "")
-    st.markdown(
-        f"""
-        <div class="card {'accent' if accent else ''}">
-            <div class="card-title">{html.escape(title)}</div>
-            <p style="margin:0; line-height:1.5;">{safe_text}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-st.title("🏦 Loan Assistant Console")
-st.write("Ask any loan-related question or request a loan evaluation.")
-
-# Initialize session state for storing loan evaluations awaiting officer decision
-if "pending_application" not in st.session_state:
-    st.session_state.pending_application = None
-if "officer_decision" not in st.session_state:
-    st.session_state.officer_decision = "Approve"
-if "officer_reason" not in st.session_state:
-    st.session_state.officer_reason = ""
-if "decision_stats" not in st.session_state:
-    st.session_state.decision_stats = {"approved": 0, "rejected": 0}
-
-
-def render_decision_stats_sidebar(placeholder=None) -> None:
-    """Render sidebar metrics based on the latest decision stats."""
-    if placeholder is None:
-        target = st.sidebar
-    else:
-        placeholder.empty()
-        target = placeholder.container()
-    with target:
-        st.header("📊 Decision Stats")
-        approved = st.session_state.decision_stats["approved"]
-        rejected = st.session_state.decision_stats["rejected"]
-        total = approved + rejected
-        st.metric("Approved", approved)
-        st.metric("Rejected", rejected)
-        st.metric("Total Decisions", total)
-        if total:
-            approval_rate = approved / total * 100.0
-            fill_percent = min(max(approval_rate, 0.0), 100.0)
-            st.markdown(
-                f"""
-                <div class="approval-progress">
-                    <div class="approval-progress__track">
-                        <div class="approval-progress__fill" style="width: {fill_percent:.1f}%;"></div>
-                    </div>
-                    <div class="approval-progress__label">Approval rate: {approval_rate:.1f}%</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-        else:
-            st.info("No decisions recorded yet.")
-
-
-# ===========================================================
-# Sidebar statistics dashboard
-# ===========================================================
-
 sidebar_placeholder = st.sidebar.empty()
 render_decision_stats_sidebar(sidebar_placeholder)
 
+st.title("🏦 Loan Assistant Console")
+st.write("Ask any loan-related question or request a loan evaluation.")
 
 # ===========================================================
 # User Input Section
@@ -213,6 +57,7 @@ if submit:
     else:
         with st.spinner("Processing your request..."):
             result = handle_user_input(user_text)
+        append_history_entry(user_text.strip(), result)
         # ---------------------------
         # Determine response type and render matching view
         # ERROR HANDLING
@@ -225,7 +70,9 @@ if submit:
         # GENERAL Q&A RESPONSE
         # ---------------------------
         elif result.get("type") == "qa":
-            render_text_card("Answer", result.get("answer", "No answer provided."), accent=True)
+            render_text_card(
+                "Answer", result.get("answer", "No answer provided."), accent=True
+            )
             st.session_state.pending_application = None
 
         # ---------------------------
