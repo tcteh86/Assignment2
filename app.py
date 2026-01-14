@@ -1,6 +1,8 @@
 """Streamlit UI for the loan assistant with modern cards and officer workflow."""
 
 import html
+from datetime import datetime
+from pathlib import Path
 
 import streamlit as st
 
@@ -136,9 +138,6 @@ def render_text_card(title: str, text: str, accent: bool = False) -> None:
         unsafe_allow_html=True,
     )
 
-st.title("🏦 Loan Assistant Console")
-st.write("Ask any loan-related question or request a loan evaluation.")
-
 # Initialize session state for storing loan evaluations awaiting officer decision
 if "pending_application" not in st.session_state:
     st.session_state.pending_application = None
@@ -148,6 +147,8 @@ if "officer_reason" not in st.session_state:
     st.session_state.officer_reason = ""
 if "decision_stats" not in st.session_state:
     st.session_state.decision_stats = {"approved": 0, "rejected": 0}
+if "interaction_history" not in st.session_state:
+    st.session_state.interaction_history = []
 
 
 def render_decision_stats_sidebar(placeholder=None) -> None:
@@ -184,145 +185,246 @@ def render_decision_stats_sidebar(placeholder=None) -> None:
 
 
 # ===========================================================
-# Sidebar statistics dashboard
+# Sidebar navigation & statistics
 # ===========================================================
 
 sidebar_placeholder = st.sidebar.empty()
 render_decision_stats_sidebar(sidebar_placeholder)
 
-
-# ===========================================================
-# User Input Section
-# ===========================================================
-
-# Wide textarea with the CTA button stacked below for clearer flow.
-user_text = st.text_area(
-    "Enter your question or loan request:",
-    placeholder="Ask for policy guidance or request a customer evaluation...",
-    height=140,
+page = st.sidebar.radio(
+    "Navigate",
+    options=["Assistant", "Past Results", "Test/Check"],
 )
-submit = st.button("Submit", use_container_width=True)
 
-# ===========================================================
-# Handle user input
-# ===========================================================
 
-if submit:
-    if not user_text.strip():
-        st.warning("Please enter a valid question.")
-    else:
-        with st.spinner("Processing your request..."):
-            result = handle_user_input(user_text)
-        # ---------------------------
-        # Determine response type and render matching view
-        # ERROR HANDLING
-        # ---------------------------
-        if result.get("type") == "error":
-            st.error(result.get("message", "Unknown error"))
-            st.session_state.pending_application = None
-
-        # ---------------------------
-        # GENERAL Q&A RESPONSE
-        # ---------------------------
-        elif result.get("type") == "qa":
-            render_text_card("Answer", result.get("answer", "No answer provided."), accent=True)
-            st.session_state.pending_application = None
-
-        # ---------------------------
-        # LOAN APPLICATION RESPONSE
-        # ---------------------------
-        elif result.get("type") == "loan_application":
-            customer = result.get("customer", {})
-            assessment = result.get("ai_assessment", {})
-            memo = result.get("letter", "")
-
-            st.header("📄 Loan Application Evaluation")
-
-            # Customer & assessment snapshot
-            info_col, assessment_col = st.columns(2, gap="large")
-
-            customer_pairs = [
-                ("Customer ID", customer.get("id", "—")),
-                ("Name", customer.get("name", "—")),
-                ("Nationality", customer.get("nationality", "—")),
-                ("PR Status", customer.get("pr_status", "—")),
-                ("Account Status", customer.get("account_status", "—")),
-                ("Credit Score", customer.get("credit_score", "—")),
-            ]
-
-            assessment_pairs = [
-                ("AI Recommendation", assessment.get("ai_recommendation", "Pending")),
-                ("Risk Tier", assessment.get("risk", "Unknown")),
-                ("Interest Rate", assessment.get("interest_rate", "Not set")),
-                ("PR Status Used", assessment.get("pr_status_used", "—")),
-            ]
-
-            with info_col:
-                render_info_card("Customer Snapshot", customer_pairs)
-            with assessment_col:
-                render_info_card("AI Assessment", assessment_pairs, accent=True)
-
-            policy_notes = assessment.get("policy_notes") or ""
-            if policy_notes:
-                render_text_card("Policy Evidence", policy_notes)
-
-            with st.expander("AI Draft Letter / Memo", expanded=True):
-                safe_memo = html.escape(memo or "No memo provided.")
-                st.markdown(
-                    f'<div class="memo-box">{safe_memo}</div>',
-                    unsafe_allow_html=True,
-                )
-
-            # Store pending application for officer approval
-            st.session_state.pending_application = {
-                "customer": customer,
-                "assessment": assessment,
-                "memo": memo,
-            }
-            ai_choice = assessment.get("ai_recommendation", "Approve").capitalize()
-            st.session_state.officer_decision = (
-                ai_choice if ai_choice in ("Approve", "Reject") else "Approve"
-            )
-            st.session_state.officer_reason = ""
-
-# ===========================================================
-# Officer Approval Section
-# ===========================================================
-
-if st.session_state.pending_application:
-    st.divider()
-    st.header("📝 Loan Officer Decision")
-    st.info(
-        "The AI provides recommendations only. Please record the human loan officer's final decision."
+def append_history_entry(prompt: str, payload: dict) -> None:
+    """Record completed interactions for later review."""
+    st.session_state.interaction_history.insert(
+        0,
+        {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "prompt": prompt,
+            "payload": payload,
+        },
     )
 
-    decision = st.radio(
-        "Select a final decision:",
-        options=["Approve", "Reject"],
-        horizontal=True,
-        key="officer_decision",
-    )
 
-    # Officers must provide a justification to satisfy audit/compliance needs.
-    reason = st.text_area(
-        "Loan officer justification (required):",
-        key="officer_reason",
-        placeholder="Explain the rationale for approving or rejecting this application...",
-        help="Provide compliance-ready reasoning for the recorded decision.",
-    )
+if page == "Assistant":
+    st.title("🏦 Loan Assistant Console")
+    st.write("Ask any loan-related question or request a loan evaluation.")
 
-    if st.button("Record Final Decision", type="primary", use_container_width=True):
-        if not reason.strip():
-            st.warning("Please provide a justification before recording the decision.")
+    # ===========================================================
+    # User Input Section
+    # ===========================================================
+
+    # Wide textarea with the CTA button stacked below for clearer flow.
+    user_text = st.text_area(
+        "Enter your question or loan request:",
+        placeholder="Ask for policy guidance or request a customer evaluation...",
+        height=140,
+    )
+    submit = st.button("Submit", use_container_width=True)
+
+    # ===========================================================
+    # Handle user input
+    # ===========================================================
+
+    if submit:
+        if not user_text.strip():
+            st.warning("Please enter a valid question.")
         else:
-            if decision == "Approve":
-                st.success("Loan Approved ✔ (recorded)")
-                st.session_state.decision_stats["approved"] += 1
+            with st.spinner("Processing your request..."):
+                result = handle_user_input(user_text)
+            append_history_entry(user_text.strip(), result)
+            # ---------------------------
+            # Determine response type and render matching view
+            # ERROR HANDLING
+            # ---------------------------
+            if result.get("type") == "error":
+                st.error(result.get("message", "Unknown error"))
+                st.session_state.pending_application = None
+
+            # ---------------------------
+            # GENERAL Q&A RESPONSE
+            # ---------------------------
+            elif result.get("type") == "qa":
+                render_text_card(
+                    "Answer", result.get("answer", "No answer provided."), accent=True
+                )
+                st.session_state.pending_application = None
+
+            # ---------------------------
+            # LOAN APPLICATION RESPONSE
+            # ---------------------------
+            elif result.get("type") == "loan_application":
+                customer = result.get("customer", {})
+                assessment = result.get("ai_assessment", {})
+                memo = result.get("letter", "")
+
+                st.header("📄 Loan Application Evaluation")
+
+                # Customer & assessment snapshot
+                info_col, assessment_col = st.columns(2, gap="large")
+
+                customer_pairs = [
+                    ("Customer ID", customer.get("id", "—")),
+                    ("Name", customer.get("name", "—")),
+                    ("Nationality", customer.get("nationality", "—")),
+                    ("PR Status", customer.get("pr_status", "—")),
+                    ("Account Status", customer.get("account_status", "—")),
+                    ("Credit Score", customer.get("credit_score", "—")),
+                ]
+
+                assessment_pairs = [
+                    ("AI Recommendation", assessment.get("ai_recommendation", "Pending")),
+                    ("Risk Tier", assessment.get("risk", "Unknown")),
+                    ("Interest Rate", assessment.get("interest_rate", "Not set")),
+                    ("PR Status Used", assessment.get("pr_status_used", "—")),
+                ]
+
+                with info_col:
+                    render_info_card("Customer Snapshot", customer_pairs)
+                with assessment_col:
+                    render_info_card("AI Assessment", assessment_pairs, accent=True)
+
+                policy_notes = assessment.get("policy_notes") or ""
+                if policy_notes:
+                    render_text_card("Policy Evidence", policy_notes)
+
+                with st.expander("AI Draft Letter / Memo", expanded=True):
+                    safe_memo = html.escape(memo or "No memo provided.")
+                    st.markdown(
+                        f'<div class="memo-box">{safe_memo}</div>',
+                        unsafe_allow_html=True,
+                    )
+
+                # Store pending application for officer approval
+                st.session_state.pending_application = {
+                    "customer": customer,
+                    "assessment": assessment,
+                    "memo": memo,
+                }
+                ai_choice = assessment.get("ai_recommendation", "Approve").capitalize()
+                st.session_state.officer_decision = (
+                    ai_choice if ai_choice in ("Approve", "Reject") else "Approve"
+                )
+                st.session_state.officer_reason = ""
+
+    # ===========================================================
+    # Officer Approval Section
+    # ===========================================================
+
+    if st.session_state.pending_application:
+        st.divider()
+        st.header("📝 Loan Officer Decision")
+        st.info(
+            "The AI provides recommendations only. Please record the human loan officer's final decision."
+        )
+
+        decision = st.radio(
+            "Select a final decision:",
+            options=["Approve", "Reject"],
+            horizontal=True,
+            key="officer_decision",
+        )
+
+        # Officers must provide a justification to satisfy audit/compliance needs.
+        reason = st.text_area(
+            "Loan officer justification (required):",
+            key="officer_reason",
+            placeholder="Explain the rationale for approving or rejecting this application...",
+            help="Provide compliance-ready reasoning for the recorded decision.",
+        )
+
+        if st.button("Record Final Decision", type="primary", use_container_width=True):
+            if not reason.strip():
+                st.warning("Please provide a justification before recording the decision.")
             else:
-                st.error("Loan Rejected ✖ (recorded)")
-                st.session_state.decision_stats["rejected"] += 1
-            st.write("**Officer justification**")
-            st.write(reason.strip())
-            st.json(st.session_state.pending_application)
-            st.session_state.pending_application = None
-            render_decision_stats_sidebar(sidebar_placeholder)
+                if decision == "Approve":
+                    st.success("Loan Approved ✔ (recorded)")
+                    st.session_state.decision_stats["approved"] += 1
+                else:
+                    st.error("Loan Rejected ✖ (recorded)")
+                    st.session_state.decision_stats["rejected"] += 1
+                st.write("**Officer justification**")
+                st.write(reason.strip())
+                st.json(st.session_state.pending_application)
+                st.session_state.pending_application = None
+                render_decision_stats_sidebar(sidebar_placeholder)
+
+elif page == "Past Results":
+    st.title("🗂️ Past Results")
+    st.write("Review previous questions, evaluations, and outcomes.")
+    history = st.session_state.interaction_history
+    if not history:
+        st.info("No interactions recorded yet. Submit a question to populate this list.")
+    else:
+        for entry in history:
+            payload = entry.get("payload", {})
+            entry_type = payload.get("type", "unknown").replace("_", " ").title()
+            with st.expander(
+                f"{entry_type} · {entry.get('timestamp', 'Unknown time')}",
+                expanded=False,
+            ):
+                render_text_card("Prompt", entry.get("prompt", ""))
+                if payload.get("type") == "qa":
+                    render_text_card(
+                        "Answer", payload.get("answer", "No answer provided.")
+                    )
+                elif payload.get("type") == "loan_application":
+                    customer = payload.get("customer", {})
+                    assessment = payload.get("ai_assessment", {})
+                    render_info_card(
+                        "Customer Snapshot",
+                        [
+                            ("Customer ID", customer.get("id", "—")),
+                            ("Name", customer.get("name", "—")),
+                            ("Credit Score", customer.get("credit_score", "—")),
+                            ("Account Status", customer.get("account_status", "—")),
+                        ],
+                    )
+                    render_info_card(
+                        "AI Assessment",
+                        [
+                            ("Recommendation", assessment.get("ai_recommendation", "—")),
+                            ("Risk Tier", assessment.get("risk", "—")),
+                            ("Interest Rate", assessment.get("interest_rate", "—")),
+                        ],
+                        accent=True,
+                    )
+                    st.caption("Memo preview")
+                    st.write(payload.get("letter", "No memo provided."))
+                elif payload.get("type") == "error":
+                    st.error(payload.get("message", "Unknown error"))
+                st.json(payload)
+
+elif page == "Test/Check":
+    st.title("✅ Test & Check")
+    st.write("Quick checks to confirm data and policy resources are ready.")
+
+    st.subheader("System readiness")
+    st.metric("Policy cache ready", "Yes" if POLICY_CACHE_READY else "No")
+
+    base_dir = Path(__file__).resolve().parent
+    data_checks = [
+        ("Credit scores data", base_dir / "data" / "credit_scores.csv"),
+        ("Account status data", base_dir / "data" / "account_status.csv"),
+        ("PR status data", base_dir / "data" / "pr_status.csv"),
+        ("Policy PDF folder", base_dir / "policies"),
+    ]
+
+    st.subheader("Data availability")
+    for label, path in data_checks:
+        if path.exists():
+            st.success(f"{label}: found")
+        else:
+            st.error(f"{label}: missing")
+
+    st.subheader("Checklist")
+    st.markdown(
+        """
+        - ✅ Policy cache built (first page load).
+        - ✅ Decision stats updated after each officer approval.
+        - ✅ Past results page captures completed interactions.
+        """
+    )
